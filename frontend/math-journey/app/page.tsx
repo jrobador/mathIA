@@ -45,7 +45,7 @@ export default function Home() {
           An immersive journey to master mathematics through visual learning and guided discovery
         </p>
 
-        <Link href="/welcome">
+        <Link href="/name">
           <Button
             size="lg"
             className="bg-indigo-600/80 hover:bg-indigo-700/90 text-white px-10 py-7 rounded-full text-xl shadow-lg transition-all duration-300 hover:scale-105 hover:shadow-indigo-500/30 hover:shadow-xl backdrop-blur-sm border border-indigo-400/30"

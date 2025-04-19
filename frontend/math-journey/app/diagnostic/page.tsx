@@ -331,7 +331,7 @@ export default function DiagnosticPage() {
         </div>
 
         {/* Main container with consistent styling */}
-        <div className="max-w-4xl w-full flex flex-col items-center z-10 bg-violet-200/80 rounded-3xl p-4 md:p-6 border border-white/40 shadow-xl overflow-hidden">
+        <div className="max-w-4xl w-full flex flex-col items-center z-10 bg-white/30 backdrop-blur-md rounded-3xl p-4 md:p-6 border border-white/40 shadow-xl overflow-hidden">
 
           {/* Progress Dots - Show always */}
            <ProgressDots
