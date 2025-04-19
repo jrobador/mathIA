@@ -84,7 +84,7 @@ export default function GreetingPage() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
-          className="w-full max-w-3xl aspect-video bg-white/90 rounded-2xl shadow-xl overflow-hidden mb-8 relative border border-indigo-100"
+          className="w-full max-w-3xl aspect-video bg-violet-200/80 rounded-2xl shadow-xl overflow-hidden mb-8 relative border border-indigo-100"
         >
           <div className="absolute inset-0 flex items-center justify-center">
             <motion.div
