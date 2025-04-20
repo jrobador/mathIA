@@ -3,80 +3,16 @@
  * Provides methods for managing sessions and communication with the agent
  */
 
-// Types for the client
-interface MathTutorConfig {
-  baseUrl?: string;
-  headers?: Record<string, string>;
-}
-
-interface SessionConfig {
-  initial_topic?: string;
-  initial_cpa_phase?: string;
-  initial_difficulty?: string;
-  difficulty_adjustment_rate?: number;
-  enable_audio?: boolean;
-  enable_images?: boolean;
-  language?: string;
-  diagnostic_score?: number;
-  diagnostic_details?: Array<DiagnosticQuestionResult>;
-}
-
-interface StartSessionOptions {
-  personalized_theme?: string;
-  initial_message?: string | null;
-  config?: SessionConfig | null;
-  diagnostic_results?: DiagnosticResults | null;
-  learning_path?: string | null;
-}
-
-interface DiagnosticQuestionResult {
-  id: number;
-  correct: boolean;
-  question_type?: string;
-  concept_tested?: string;
-}
-
-interface DiagnosticResults {
-  score: number;
-  correct_answers: number;
-  total_questions: number;
-  recommended_level: string;
-  question_results: DiagnosticQuestionResult[];
-}
-
-interface AgentOutput {
-  text?: string;
-  image_url?: string;
-  audio_url?: string;
-  feedback?: {
-    type?: string;
-    message?: string;
-  };
-  prompt_for_answer?: boolean;
-  evaluation?: string;
-}
-
-interface StartSessionResponse {
-  session_id: string;
-  initial_output: AgentOutput;
-  status: string;
-}
-
-interface ProcessInputResponse {
-  session_id: string;
-  agent_output: AgentOutput;
-  mastery_level?: number;
-}
-
-interface SessionStatusResponse {
-  session_id: string;
-  current_topic: string;
-  mastery_levels: Record<string, number>;
-  current_cpa_phase: string;
-  is_active: boolean;
-  created_at?: number;
-  last_updated?: number;
-}
+import {
+  MathTutorClientConfig,
+  DiagnosticQuestionResult,
+  DiagnosticResults,
+  StartSessionOptions,
+  StartSessionResponse,
+  ProcessInputResponse,
+  SessionStatusResponse,
+  TutorConfig as SessionConfig // Optional: Alias if needed
+} from "@/types/api";
 
 // Default API configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
@@ -90,7 +26,7 @@ class MathTutorClient {
   /**
    * Initialize the API client with optional configuration
    */
-  constructor(config: MathTutorConfig = {}) {
+  constructor(config: MathTutorClientConfig = {}) {
     this.baseUrl = config.baseUrl || API_BASE_URL;
     this.headers = {
       'Content-Type': 'application/json',

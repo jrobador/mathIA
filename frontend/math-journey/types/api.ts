@@ -47,7 +47,7 @@ export enum CPAPhase {
   
   // Diagnóstico
   export interface DiagnosticQuestionResult {
-    id: number;
+    question_id: string;
     correct: boolean;
     question_type?: string;
     concept_tested?: string;

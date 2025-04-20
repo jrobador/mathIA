@@ -1,118 +1,94 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Image from "next/image"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Loader2, AlertCircle, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
+interface VisualProp {
+  url: string;
+  alt: string;
+}
+
 interface VisualDisplayProps {
-  visual?: {
-    url: string
-    type: "concrete" | "pictorial" | "abstract"
-    alt: string
-  }
+  visual?: VisualProp 
 }
 
 export default function VisualDisplay({ visual }: VisualDisplayProps) {
   const [isLoading, setIsLoading] = useState(visual ? true : false)
   const [error, setError] = useState<string | null>(null)
-  const [retryCount, setRetryCount] = useState(0)
+  const [imageKey, setImageKey] = useState(visual?.url || Date.now().toString());
 
-  // Handle retry for failed images
+  useEffect(() => {
+    if (visual) {
+      setIsLoading(true);
+      setError(null);
+      setImageKey(visual.url);
+    } else {
+      setIsLoading(false);
+      setError(null);
+    }
+  }, [visual?.url]);
+
   const handleRetry = () => {
-    if (!visual) return
-    
-    setIsLoading(true)
-    setError(null)
-    setRetryCount(prev => prev + 1)
-  }
+    if (!visual) return;
+    setIsLoading(true);
+    setError(null);
+    setImageKey(`${visual.url}?retry=${Date.now()}`);
+  };
 
   if (!visual) {
     return (
       <div className="flex items-center justify-center h-48 bg-gray-100 rounded-lg">
-        <p className="text-gray-500 text-sm">No visual aid available yet</p>
+        <p className="text-gray-500 text-sm">No visual aid available</p>
       </div>
     )
   }
 
   return (
     <div>
-      <Tabs defaultValue={visual.type} className="mb-2">
-        <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger
-            value="concrete"
-            disabled={visual.type !== "concrete"}
-            className={visual.type === "concrete" ? "text-blue-700" : ""}
-          >
-            Concrete
-          </TabsTrigger>
-          <TabsTrigger
-            value="pictorial"
-            disabled={visual.type !== "pictorial"}
-            className={visual.type === "pictorial" ? "text-blue-700" : ""}
-          >
-            Pictorial
-          </TabsTrigger>
-          <TabsTrigger
-            value="abstract"
-            disabled={visual.type !== "abstract"}
-            className={visual.type === "abstract" ? "text-blue-700" : ""}
-          >
-            Abstract
-          </TabsTrigger>
-        </TabsList>
-      </Tabs>
-
+      {/* Visual Area */}
       <div className="relative h-48 w-full overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
-        {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 z-10">
-            <Loader2 className="h-8 w-8 text-blue-500 animate-spin" />
+        {isLoading && !error && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-100/80 z-10">
+            <Loader2 className="h-8 w-8 text-indigo-500 animate-spin" />
           </div>
         )}
-        
+
         {error && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-100 z-10 p-4">
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-red-50 z-10 p-4">
             <AlertCircle className="h-6 w-6 text-red-500 mb-2" />
             <p className="text-red-700 text-sm text-center mb-2">{error}</p>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={handleRetry} 
-              className="flex items-center"
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRetry}
+              className="flex items-center text-xs h-7"
             >
-              <RefreshCw className="h-4 w-4 mr-1" /> Reload Image
+              <RefreshCw className="h-3 w-3 mr-1" /> Retry
             </Button>
           </div>
         )}
 
-        <Image 
-          src={`${visual.url}${retryCount > 0 ? `?retry=${retryCount}` : ''}`}
-          alt={visual.alt} 
-          fill 
-          className="object-contain"
-          onLoadStart={() => setIsLoading(true)}
+        <Image
+          key={imageKey}
+          src={visual.url}
+          alt={visual.alt}
+          fill
+          className="object-contain p-2"
           onLoad={() => {
-            setIsLoading(false)
-            setError(null)
+            setIsLoading(false);
+            setError(null);
           }}
           onError={() => {
-            setIsLoading(false)
-            setError("Unable to load visual aid")
+            setIsLoading(false);
+            setError("Unable to load visual aid");
           }}
+          unoptimized={visual.url.includes("localhost")}
         />
       </div>
-      
-      <div className="mt-2">
-        <p className="text-xs text-gray-500">
-          {visual.type === "concrete" 
-            ? "Physical representation using real-world objects" 
-            : visual.type === "pictorial" 
-              ? "Visual model representation of the concept"
-              : "Abstract mathematical symbols and notation"
-          }
-        </p>
-      </div>
+      {/* Optional: Add a caption or context if needed */}
+      {/* <p className="text-xs text-gray-500 mt-1">{visual.alt}</p> */}
     </div>
   )
 }
