@@ -130,10 +130,22 @@ async def start_session(request: StartSessionRequest = Body(...)):
             else:
                 print(f"Warning: Could not process provided diagnostic results for session {session_id}.")
 
+        # Make sure we set the initial node to determine_next_step
+        initial_state["next"] = "determine_next_step"
+
         # Run the compiled graph with the initial state
         print(f"Starting new session {session_id} with topic: {initial_state.get('current_topic', 'N/A')}, mastery: {initial_state.get('topic_mastery', {}).get(initial_state.get('current_topic', ''), 'N/A')}")
         # The graph execution starts, usually leading to the first agent output
         result_state = await compiled_app.ainvoke(initial_state)
+        
+        # After getting the initial output, clear the next state to prevent automatic execution
+        if "next" in result_state:
+            del result_state["next"]
+            
+        # Make sure not to proceed to evaluation automatically
+        if result_state.get("current_step_output", {}).get("prompt_for_answer", False):
+            # If this is prompting for an answer, store that fact but don't auto-progress
+            print(f"Session {session_id} initialized with a practice problem. Waiting for user input before evaluation.")
         
         # Store the updated state in our active sessions dictionary
         active_sessions[session_id] = {
@@ -165,7 +177,7 @@ async def start_session(request: StartSessionRequest = Body(...)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail=f"Failed to start session: {str(e)}"
         )
-
+    
 @router.post("/{session_id}/process", response_model=ProcessInputResponse)
 async def process_input(
     session_id: str, 
@@ -210,18 +222,16 @@ async def process_input(
         # Get the output from the *previous* step to see if it expected an answer
         last_output = current_state.get("current_step_output", {})
         
-        # If the last agent output prompted the user for an answer, 
-        # we need to ensure the next graph step evaluates that answer.
-        # Note: This logic might be simplified if the graph itself handles this transition.
-        # If the previous node was 'present_independent_practice' or similar, 
-        # the next logical step is 'evaluate_answer'. LangGraph often handles this implicitly 
-        # if edges are set up correctly, but explicit setting can add robustness.
-        # For now, let's assume the graph might need this hint if resuming after user input.
-        # if last_output.get("prompt_for_answer", False):
-        #     print(f"User provided answer for session {session_id}. Routing to evaluation...")
-            # Explicitly set the next node to 'evaluate_answer' if needed by graph design
-            # current_state["next"] = "evaluate_answer" 
-            # If graph handles this automatically, this line might be unnecessary.
+        # CLEAR DECISION: If the previous output was a question/practice problem
+        # then route to evaluation, otherwise to the decision node
+        if last_output.get("prompt_for_answer", False):
+            print(f"User provided answer for session {session_id}. Routing to evaluation...")
+            # Explicitly set the next node to evaluate_answer
+            current_state["next"] = "evaluate_answer"
+        else:
+            # For regular conversation, start with determine_next_step
+            current_state["next"] = "determine_next_step"
+            print(f"Regular input for session {session_id}. Routing to decision node...")
 
         # Execute the graph with the updated state (including the new user message)
         start_time = time.time()
@@ -229,6 +239,10 @@ async def process_input(
         
         # Invoke the compiled graph asynchronously
         result_state = await compiled_app.ainvoke(current_state)
+        
+        # After processing, clear the next state to prevent automatic execution
+        if "next" in result_state:
+            del result_state["next"]
         
         # Update the session data with the new state returned by the graph
         session_data["state"] = result_state
@@ -265,7 +279,7 @@ async def process_input(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail=f"Failed to process input: {str(e)}"
         )
-
+    
 @router.get("/{session_id}/status", response_model=SessionStatusResponse)
 async def get_session_status(session_id: str):
     """

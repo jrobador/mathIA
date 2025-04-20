@@ -33,7 +33,8 @@ Contextualize examples with the theme of interest: {{theme}}.
 Use accessible language and step-by-step explanations.
 The explanation should be concise yet effective.
 
-Write a maximum of 3 paragraphs, being clear and direct.
+Write a maximum of 2 paragraphs, being clear and direct.
 
+Don't add any additional information or context. Don't add **problem statemet** or any other text. Only the requested one.
 user:
 Please explain {{topic}} in the {{cpa_phase}} phase using examples related to {{theme}}.

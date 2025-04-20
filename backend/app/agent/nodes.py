@@ -268,8 +268,9 @@ async def present_independent_practice(state: StudentSessionState) -> Dict[str, 
     # Update the state with the output
     state["current_step_output"] = current_step_output
     
-    # Indicate the next node
-    return {"next": "evaluate_answer"}
+    # Changed: Return to determine_next_step instead of evaluate_answer
+    # This prevents automatic evaluation before getting user input
+    return {"next": "determine_next_step"}
 
 async def evaluate_answer(state: StudentSessionState) -> Dict[str, Any]:
     """

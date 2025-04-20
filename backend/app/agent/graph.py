@@ -74,14 +74,15 @@ def build_math_tutor_graph() -> StateGraph:
             "present_independent_practice": "present_independent_practice",
             "provide_targeted_feedback": "provide_targeted_feedback",
             "check_advance_topic": "check_advance_topic",
+            "evaluate_answer": "evaluate_answer",  # Added this line to make evaluate_answer reachable
             END: END  # Direct mapping to the END constant for termination
         }
     )
 
-    # Add edges from practice nodes to evaluate_answer
-    # These nodes set "next" to "evaluate_answer" in their implementations
-    graph.add_edge("present_guided_practice", "evaluate_answer")
-    graph.add_edge("present_independent_practice", "evaluate_answer")
+    # Add edges from practice nodes to the determine_next_step node
+    # We removed the direct connection to evaluate_answer
+    graph.add_edge("present_guided_practice", "determine_next_step")
+    graph.add_edge("present_independent_practice", "determine_next_step")
 
     # Conditional edges for 'check_advance_topic' node
     # This node can either loop back to the decision node or end the graph.
