@@ -18,7 +18,9 @@ from app.agent.diagnostic import create_diagnostic_result_from_json, apply_diagn
 from langchain_core.messages import HumanMessage # For representing user input
 import time
 import uuid # For generating unique session IDs
+import asyncio # For creating locks and asynchronous operations
 from typing import Dict, Any, Optional
+from fastapi import BackgroundTasks
 
 # Create API router instance
 router = APIRouter()
@@ -29,6 +31,61 @@ active_sessions: Dict[str, Dict[str, Any]] = {}
 
 # For performance, compile the graph once on startup
 compiled_app = get_compiled_app() 
+
+async def generate_session_content_background(session_id: str, state: Dict[str, Any], diagnostic_results: Optional[Dict[str, Any]] = None):
+    """
+    Background task to generate initial content for a session.
+    This runs asynchronously after the session creation response is returned.
+    
+    Args:
+        session_id: The ID of the session to generate content for
+        state: The initial state to use
+        diagnostic_results: Optional diagnostic results to apply
+    """
+    try:
+        print(f"Starting background content generation for session {session_id}")
+        
+        # Check if session still exists
+        if session_id not in active_sessions:
+            print(f"Session {session_id} no longer exists, aborting content generation")
+            return
+            
+        # Apply diagnostic results if provided
+        if diagnostic_results:
+            diagnostic_obj = create_diagnostic_result_from_json(diagnostic_results)
+            if diagnostic_obj:
+                apply_diagnostic_to_state(state, diagnostic_obj)
+                
+        # Run the graph to generate content
+        print(f"Running graph for session {session_id} with topic: {state.get('current_topic')}")
+        result_state = await compiled_app.ainvoke(state)
+        
+        # After getting the initial output, clear the next state to prevent automatic execution
+        if "next" in result_state:
+            del result_state["next"]
+            
+        # Store the updated state in the active sessions dictionary
+        active_sessions[session_id]["state"] = result_state
+        active_sessions[session_id]["last_updated"] = time.time()
+        
+        # CRITICAL FIX: Make sure to set content_ready flag to True
+        active_sessions[session_id]["content_ready"] = True
+        
+        print(f"Background content generation completed for session {session_id}")
+        print(f"Content ready flag set to: {active_sessions[session_id].get('content_ready', False)}")
+        
+    except Exception as e:
+        print(f"Error in background content generation for session {session_id}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        # Update session with error state if it still exists
+        if session_id in active_sessions:
+            active_sessions[session_id]["error"] = str(e)
+            active_sessions[session_id]["last_updated"] = time.time()
+            # Still mark as ready so the frontend can detect the error
+            active_sessions[session_id]["content_ready"] = True
+            print(f"Error occurred, content_ready set to True to indicate completion with error")
 
 def map_learning_path_to_topic(learning_path: Optional[LearningPath]) -> str:
     """Maps the selected learning path enum to an initial topic ID string."""
@@ -64,120 +121,115 @@ def map_difficulty_to_mastery(difficulty: Optional[DifficultySetting]) -> float:
     return difficulty_to_mastery.get(difficulty, 0.1)
 
 @router.post("/start", response_model=StartSessionResponse)
-async def start_session(request: StartSessionRequest = Body(...)):
+async def start_session(request: StartSessionRequest = Body(...), background_tasks: BackgroundTasks = None):
     """
     Starts a new learning session with the tutor agent.
+    Returns quickly with a session ID, then processes content in the background.
     
     - Generates a unique session ID.
-    - Initializes the state with the provided configuration (theme, path, diagnostic).
-    - Runs the graph to get the first agent message.
+    - Initializes basic state.
+    - Queues the heavy content generation for background processing.
     
     Returns:
-        StartSessionResponse: Contains the session ID and the initial agent output.
+        StartSessionResponse: Contains the session ID and minimal initial output.
     """
     try:
+        # BUGFIX: Tracking for this specific request
+        request_id = str(uuid.uuid4())
+        print(f"Processing start session request {request_id}")
+        
         # Generate a unique ID for the session
         session_id = str(uuid.uuid4())
+        print(f"Creating new session {session_id}")
         
-        # Determine the initial topic based on learning path or config
-        initial_topic = None
+        # Create basic initial state with minimal processing
+        initial_state = initialize_state(personalized_theme=request.personalized_theme)
+        
+        # Set initial topic if specified
         if request.learning_path:
             initial_topic = map_learning_path_to_topic(request.learning_path)
-        elif request.config and request.config.initial_topic:
-            initial_topic = request.config.initial_topic
-        # Default topic is set within initialize_state if none is provided here
+            initial_state["current_topic"] = initial_topic
         
-        # Determine initial difficulty from diagnostic or config
+        # Get initial mastery level from diagnostic results or defaults
         initial_difficulty = None
         if request.diagnostic_results:
             initial_difficulty = request.diagnostic_results.recommended_level
         elif request.config and request.config.initial_difficulty:
             initial_difficulty = request.config.initial_difficulty
-            
-        # Map difficulty setting to initial mastery level
-        initial_mastery = map_difficulty_to_mastery(initial_difficulty)
         
-        # Create the initial state with the personalized theme
-        initial_state = initialize_state(personalized_theme=request.personalized_theme)
+        initial_mastery = map_difficulty_to_mastery(initial_difficulty or "beginner")
         
-        # If an initial topic is determined, set it in the state
-        if initial_topic:
-            initial_state["current_topic"] = initial_topic
-            # Initialize mastery for this specific topic
-            initial_state["topic_mastery"] = {initial_topic: initial_mastery}
-        else:
-            # If no specific topic, ensure default topic has initial mastery
-            default_topic = initial_state["current_topic"]
-            initial_state["topic_mastery"] = {default_topic: initial_mastery}
-
-        # If there's an initial message from the user, add it to the history
+        # Set mastery for the current topic
+        current_topic = initial_state["current_topic"]
+        initial_state["topic_mastery"] = {current_topic: initial_mastery}
+        
+        # Add initial message if provided
         if request.initial_message:
             initial_state["messages"] = [HumanMessage(content=request.initial_message)]
         
         # Apply additional configurations if provided
         if request.config:
             if request.config.initial_cpa_phase:
-                initial_state["current_cpa_phase"] = request.config.initial_cpa_phase.value # Ensure enum value is used
-
-        # If diagnostic results are provided, apply them to the state
-        if request.diagnostic_results:
-            # Convert Pydantic model to dict, then create DiagnosticResult object
-            diagnostic_dict = request.diagnostic_results.dict() 
-            diagnostic_obj = create_diagnostic_result_from_json(diagnostic_dict)
-            if diagnostic_obj:
-                # This function modifies initial_state in place
-                apply_diagnostic_to_state(initial_state, diagnostic_obj) 
-            else:
-                print(f"Warning: Could not process provided diagnostic results for session {session_id}.")
-
-        # Make sure we set the initial node to determine_next_step
+                initial_state["current_cpa_phase"] = request.config.initial_cpa_phase.value
+        
+        # Initialize tracking fields
+        initial_state["theory_presented_for_topics"] = []
         initial_state["next"] = "determine_next_step"
-
-        # Run the compiled graph with the initial state
-        print(f"Starting new session {session_id} with topic: {initial_state.get('current_topic', 'N/A')}, mastery: {initial_state.get('topic_mastery', {}).get(initial_state.get('current_topic', ''), 'N/A')}")
-        # The graph execution starts, usually leading to the first agent output
-        result_state = await compiled_app.ainvoke(initial_state)
         
-        # After getting the initial output, clear the next state to prevent automatic execution
-        if "next" in result_state:
-            del result_state["next"]
-            
-        # Make sure not to proceed to evaluation automatically
-        if result_state.get("current_step_output", {}).get("prompt_for_answer", False):
-            # If this is prompting for an answer, store that fact but don't auto-progress
-            print(f"Session {session_id} initialized with a practice problem. Waiting for user input before evaluation.")
-        
-        # Store the updated state in our active sessions dictionary
+        # Create session with minimal initial data
         active_sessions[session_id] = {
-            "state": result_state, 
+            "state": initial_state,
             "created_at": time.time(),
-            "last_updated": time.time()
+            "last_updated": time.time(),
+            "content_ready": False  # Flag to indicate content is still being generated
         }
         
-        # If diagnostic results were provided, store them alongside the state
-        if request.diagnostic_results:
-            active_sessions[session_id]["diagnostic_results"] = request.diagnostic_results.dict()
+        # Prepare a simple initial output
+        initial_output = {
+            "text": f"Welcome! Setting up your personalized {request.personalized_theme} math experience...",
+            "prompt_for_answer": False,
+            "is_loading": True
+        }
         
-        # Prepare the response using the output generated by the graph run
-        agent_output = AgentOutput(**result_state.get("current_step_output", {}))
+        # IMPORTANT: Start content generation in the background
+        if background_tasks:
+            background_tasks.add_task(
+                generate_session_content_background,
+                session_id=session_id,
+                state=initial_state,
+                diagnostic_results=request.diagnostic_results.dict() if request.diagnostic_results else None
+            )
+        else:
+            # Fallback if background_tasks is not available (should not happen)
+            asyncio.create_task(
+                generate_session_content_background(
+                    session_id=session_id,
+                    state=initial_state,
+                    diagnostic_results=request.diagnostic_results.dict() if request.diagnostic_results else None
+                )
+            )
         
+        print(f"Completed initial session creation {session_id} for request {request_id}")
+        print(f"Content generation is now happening in the background")
+        
+        # Return quickly with just the session ID and minimal output
         return StartSessionResponse(
-            session_id=session_id, 
-            initial_output=agent_output,
-            status="active" # Indicate the session is now active
+            session_id=session_id,
+            initial_output=AgentOutput(**initial_output),
+            status="initializing"  # Signal that content is still being generated
         )
         
     except Exception as e:
         # Log the error for debugging
         print(f"Error starting session: {str(e)}")
         import traceback
-        traceback.print_exc() # Print the full traceback
+        traceback.print_exc()
         # Raise an HTTP exception to inform the client
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to start session: {str(e)}"
         )
-    
+            
 @router.post("/{session_id}/process", response_model=ProcessInputResponse)
 async def process_input(
     session_id: str, 
@@ -218,21 +270,11 @@ async def process_input(
         # Append the new HumanMessage
         current_state["messages"].append(HumanMessage(content=request.message))
         
-        # --- Determine how to resume the graph ---
-        # Get the output from the *previous* step to see if it expected an answer
-        last_output = current_state.get("current_step_output", {})
+        # BUGFIX: Always set evaluate_answer as the next step when receiving user input
+        # This ensures we properly evaluate their response to the practice problem
+        current_state["next"] = "evaluate_answer"
+        print(f"User provided answer for session {session_id}. Routing to evaluation...")
         
-        # CLEAR DECISION: If the previous output was a question/practice problem
-        # then route to evaluation, otherwise to the decision node
-        if last_output.get("prompt_for_answer", False):
-            print(f"User provided answer for session {session_id}. Routing to evaluation...")
-            # Explicitly set the next node to evaluate_answer
-            current_state["next"] = "evaluate_answer"
-        else:
-            # For regular conversation, start with determine_next_step
-            current_state["next"] = "determine_next_step"
-            print(f"Regular input for session {session_id}. Routing to decision node...")
-
         # Execute the graph with the updated state (including the new user message)
         start_time = time.time()
         print(f"Processing input for session {session_id}. Current topic: {current_state.get('current_topic')}, Phase: {current_state.get('current_cpa_phase')}")
@@ -279,11 +321,12 @@ async def process_input(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail=f"Failed to process input: {str(e)}"
         )
-    
+
+
 @router.get("/{session_id}/status", response_model=SessionStatusResponse)
 async def get_session_status(session_id: str):
     """
-    Retrieves the current status of an active session, including progress information.
+    Retrieves the current status of an active session, including content generation progress.
     
     Args:
         session_id: The ID of the session.
@@ -305,15 +348,34 @@ async def get_session_status(session_id: str):
     # Extract relevant information from the state
     current_topic = current_state.get("current_topic", "")
     topic_mastery = current_state.get("topic_mastery", {})
-    current_cpa_phase = current_state.get("current_cpa_phase", "Concrete") # Default if not set
+    current_cpa_phase = current_state.get("current_cpa_phase", "Concrete")
+    
+    # Check if content is ready (default to False if not set)
+    content_ready = session_data.get("content_ready", False)
+    
+    # Debug log the content ready flag
+    print(f"Status check for session {session_id}: content_ready={content_ready}")
+    
+    # Get any error message
+    error = session_data.get("error")
+    
+    # Get the current output if content is ready
+    agent_output = None
+    if content_ready and "current_step_output" in current_state:
+        output_data = current_state.get("current_step_output", {})
+        if output_data:
+            agent_output = AgentOutput(**output_data)
     
     # Construct and return the status response
     return SessionStatusResponse(
         session_id=session_id,
         current_topic=current_topic,
-        mastery_levels=topic_mastery, # Dictionary of mastery levels per topic
+        mastery_levels=topic_mastery,
         current_cpa_phase=current_cpa_phase,
-        is_active=True, # Assumed active if found
+        is_active=True,
+        content_ready=content_ready,
+        agent_output=agent_output,
+        error=error,
         created_at=session_data.get("created_at"),
         last_updated=session_data.get("last_updated")
     )

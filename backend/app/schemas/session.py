@@ -207,6 +207,9 @@ class SessionStatusResponse(BaseModel):
     mastery_levels: Dict[str, float] = Field(..., description="Dictionary mapping topic IDs to estimated mastery levels (0.0-1.0).")
     current_cpa_phase: CPAPhase = Field(..., description="Current CPA phase (Concrete, Pictorial, Abstract).")
     is_active: bool = Field(..., description="Indicates if the session is considered active.")
+    content_ready: bool = Field(False, description="Indicates if initial content has been generated.")
+    agent_output: Optional[AgentOutput] = Field(None, description="The agent's output if content is ready.")
+    error: Optional[str] = Field(None, description="Error message if content generation failed.")
     created_at: Optional[float] = Field(None, description="Timestamp when the session was created (Unix epoch).")
     last_updated: Optional[float] = Field(None, description="Timestamp when the session was last updated (Unix epoch).")
     
@@ -223,6 +226,13 @@ class SessionStatusResponse(BaseModel):
                  },
                  "current_cpa_phase": "Pictorial",
                  "is_active": True,
+                 "content_ready": True,
+                 "agent_output": {
+                    "text": "Let's practice comparing fractions...",
+                    "image_url": "http://example.com/images/fractions.png",
+                    "prompt_for_answer": True
+                 },
+                 "error": None,
                  "created_at": 1678886400.0,
                  "last_updated": 1678887000.0
             }

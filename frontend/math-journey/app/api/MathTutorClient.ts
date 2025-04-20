@@ -11,7 +11,8 @@ import {
   StartSessionResponse,
   ProcessInputResponse,
   SessionStatusResponse,
-  TutorConfig as SessionConfig // Optional: Alias if needed
+  TutorConfig as SessionConfig, // Optional: Alias if needed
+  AgentOutput
 } from "@/types/api";
 
 // Default API configuration
@@ -22,6 +23,8 @@ class MathTutorClient {
   private headers: Record<string, string>;
   private currentSessionId: string | null;
   private requestTimeoutMs: number;
+  private quickTimeoutMs: number;
+  private pollingIntervalMs: number;
 
   /**
    * Initialize the API client with optional configuration
@@ -33,7 +36,9 @@ class MathTutorClient {
       ...(config.headers || {}),
     };
     this.currentSessionId = null;
-    this.requestTimeoutMs = 30000; // 30 second timeout
+    this.requestTimeoutMs = 30000; // 30 second timeout for regular requests
+    this.quickTimeoutMs = 8000;    // 8 second timeout for quick responses
+    this.pollingIntervalMs = 1000; // 1 second interval between polls
     
     // Try to restore session from localStorage if available
     this.restoreSession();
@@ -43,7 +48,7 @@ class MathTutorClient {
    * Start a new tutoring session
    */
   async startSession({
-    personalized_theme = 'espacio',
+    personalized_theme = 'space',
     initial_message = null,
     config = null,
     diagnostic_results = null,
@@ -65,9 +70,11 @@ class MathTutorClient {
         sessionConfig.initial_topic = this.mapLearningPathToTopic(learning_path);
       }
 
-      // Make API request with timeout
+      console.log("Sending session start request to backend...");
+      
+      // Make API request with a shorter timeout - we expect quick response now
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+      const timeoutId = setTimeout(() => controller.abort(), this.quickTimeoutMs);
       
       const response = await fetch(`${this.baseUrl}/session/start`, {
         method: 'POST',
@@ -90,11 +97,35 @@ class MathTutorClient {
 
       const data: StartSessionResponse = await response.json();
       
-      // Store session ID
+      // Store session ID immediately
       this.currentSessionId = data.session_id;
       this.saveSession();
       
-      console.log("Session started:", data.session_id);
+      console.log("Session ID received:", data.session_id);
+      
+      // If status indicates content is still being generated, poll for completion
+      if (data.status === "initializing") {
+        console.log("Content is being generated in the background, polling for completion...");
+        try {
+          const completeData = await this.pollForSessionCompletion(data.session_id);
+          
+          // Update the initial output with the complete content if available
+          if (completeData && completeData.agent_output) {
+            data.initial_output = completeData.agent_output;
+            data.status = "active";
+            
+            // Normalize URLs for image and audio
+            this.normalizeContentUrls(data.initial_output);
+            console.log("Content generation complete, updated response with full content");
+          }
+        } catch (pollingError) {
+          console.warn("Polling for content completion failed, returning initial response:", pollingError);
+          // We'll continue with the initial response even if polling fails
+        }
+      } else if (data.initial_output) {
+        // Normalize URLs for any content returned immediately
+        this.normalizeContentUrls(data.initial_output);
+      }
       
       return data;
     } catch (error) {
@@ -134,15 +165,9 @@ class MathTutorClient {
       
       const data: ProcessInputResponse = await response.json();
       
-      // Enhance URLs if they're relative
+      // Normalize URLs if output exists
       if (data.agent_output) {
-        if (data.agent_output.image_url && data.agent_output.image_url.startsWith('/')) {
-          data.agent_output.image_url = `${this.baseUrl}${data.agent_output.image_url}`;
-        }
-        
-        if (data.agent_output.audio_url && data.agent_output.audio_url.startsWith('/')) {
-          data.agent_output.audio_url = `${this.baseUrl}${data.agent_output.audio_url}`;
-        }
+        this.normalizeContentUrls(data.agent_output);
       }
       
       return data;
@@ -173,7 +198,14 @@ class MathTutorClient {
         throw new Error(errorData.detail || 'Error getting session status');
       }
       
-      return await response.json();
+      const data = await response.json();
+      
+      // Normalize URLs in agent output if present
+      if (data.agent_output) {
+        this.normalizeContentUrls(data.agent_output);
+      }
+      
+      return data;
     } catch (error) {
       console.error('Error getting session status:', error);
       throw error;
@@ -273,6 +305,63 @@ class MathTutorClient {
     };
   }
   
+/**
+ * Poll for session content completion
+ * @param sessionId The session ID to poll for
+ * @param maxAttempts Maximum number of polling attempts (default 60)
+ * @returns The completed session status or null if timed out
+ */
+private async pollForSessionCompletion(
+  sessionId: string, 
+  maxAttempts = 60
+): Promise<SessionStatusResponse | null> {
+  console.log(`Polling for session ${sessionId} content completion...`);
+  
+  let attempts = 0;
+  
+  while (attempts < maxAttempts) {
+    try {
+      attempts++;
+      
+      // Get the current status
+      const status = await this.getSessionStatus(sessionId);
+      
+      // Debug log the complete status response
+      console.log(`Poll attempt ${attempts}, status:`, {
+        content_ready: status.content_ready,
+        has_output: !!status.agent_output,
+        error: status.error,
+        mastery: status.mastery_levels[status.current_topic]
+      });
+      
+      // Check if content is ready or if there was an error
+      if (status.content_ready || status.error) {
+        console.log(`Session ${sessionId} content is ready after ${attempts} attempts`);
+        return status;
+      }
+      
+      // Wait before trying again - increase wait time for later attempts
+      const waitTime = Math.min(this.pollingIntervalMs * (1 + Math.floor(attempts / 10)), 3000);
+      console.log(`Waiting for session content, attempt ${attempts}/${maxAttempts} (${waitTime}ms)...`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+      
+    } catch (error) {
+      console.error(`Error polling session status (attempt ${attempts}):`, error);
+      
+      // Wait a bit longer after errors
+      await new Promise(resolve => setTimeout(resolve, this.pollingIntervalMs * 2));
+      
+      // If we've had too many consecutive errors, give up
+      if (attempts > maxAttempts / 2) {
+        throw new Error(`Too many errors while polling for session completion: ${error}`);
+      }
+    }
+  }
+  
+  console.warn(`Polling timed out after ${maxAttempts} attempts for session ${sessionId}`);
+  return null;
+}
+
   /**
    * Get the current session ID
    */
@@ -293,6 +382,19 @@ class MathTutorClient {
    */
   hasActiveSession(): boolean {
     return this.currentSessionId !== null;
+  }
+  
+  /**
+   * Normalizes relative URLs in agent output to absolute URLs
+   */
+  private normalizeContentUrls(agentOutput: AgentOutput): void {
+    if (agentOutput.image_url && agentOutput.image_url.startsWith('/')) {
+      agentOutput.image_url = `${this.baseUrl}${agentOutput.image_url}`;
+    }
+    
+    if (agentOutput.audio_url && agentOutput.audio_url.startsWith('/')) {
+      agentOutput.audio_url = `${this.baseUrl}${agentOutput.audio_url}`;
+    }
   }
   
   /**

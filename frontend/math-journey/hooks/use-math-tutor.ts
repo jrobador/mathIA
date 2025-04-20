@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import MathTutorClient from "@/app/api/mathTutorClient";
 import { AgentOutput, DiagnosticQuestionResult } from "@/types/api";
 import { toast } from "sonner";
@@ -44,6 +44,11 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [masteryLevel, setMasteryLevel] = useState<number>(0);
   const [error, setError] = useState<Error | null>(null);
+  
+  // BUGFIX: Add session request tracking refs
+  const sessionRequestPendingRef = useRef<boolean>(false);
+  const sessionStartedRef = useRef<boolean>(false);
+  const autoConnectPerformedRef = useRef<boolean>(false);
 
   // Start a tutoring session
   const startSession = useCallback(async (options: {
@@ -52,6 +57,19 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
     learning_path?: string;
     diagnostic_results?: DiagnosticQuestionResult[];
   }) => {
+    // BUGFIX: Prevent concurrent session creation requests
+    if (sessionRequestPendingRef.current) {
+      console.log("Session request already in progress, ignoring duplicate request");
+      return;
+    }
+    
+    // BUGFIX: Don't start a new session if one is already active
+    if (sessionId || sessionStartedRef.current) {
+      console.log("Session already active, ignoring new session request");
+      return;
+    }
+    
+    sessionRequestPendingRef.current = true;
     setIsLoading(true);
     setError(null);
     
@@ -62,6 +80,8 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       const formattedDiagnostic = diagnostic_results 
         ? client.formatDiagnosticResults(diagnostic_results)
         : null;
+        
+      console.log("Starting new session...");
       
       // Call the API
       const response = await client.startSession({
@@ -74,6 +94,7 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       // Update state
       setSessionId(response.session_id);
       setAgentOutput(response.initial_output);
+      sessionStartedRef.current = true;
       
       console.log("Session started:", response.session_id);
     } catch (err) {
@@ -84,8 +105,9 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       toast("Could not start the tutoring session");
     } finally {
       setIsLoading(false);
+      sessionRequestPendingRef.current = false;
     }
-  }, [client, toast]);
+  }, [client]);
 
   // Send a message to the tutor
   const sendMessage = useCallback(async (message: string) => {
@@ -117,7 +139,7 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
     } finally {
       setIsLoading(false);
     }
-  }, [client, sessionId, toast]);
+  }, [client, sessionId]);
 
   // End the current tutoring session
   const endSession = useCallback(async () => {
@@ -129,6 +151,8 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
     try {
       await client.endSession();
       resetState();
+      // BUGFIX: Reset session tracking refs
+      sessionStartedRef.current = false;
       console.log("Session ended");
     } catch (err) {
       const error = err as Error;
@@ -136,7 +160,7 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       
       toast("Could not properly end the session");
     }
-  }, [client, sessionId, toast]);
+  }, [client, sessionId]);
 
   // Reset the internal state
   const resetState = useCallback(() => {
@@ -149,8 +173,12 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
 
   // Auto-connect logic
   useEffect(() => {
-    if (autoConnect && !sessionId && !isLoading) {
+    // BUGFIX: Use refs to ensure auto-connect only happens once
+    if (autoConnect && !sessionId && !isLoading && !autoConnectPerformedRef.current && !sessionRequestPendingRef.current) {
       const autoInitialize = async () => {
+        // Mark auto-connect as in progress before any async operations
+        autoConnectPerformedRef.current = true;
+        
         // Retrieve preferences from localStorage
         const theme = localStorage.getItem("learningTheme") || "space";
         const learningPath = localStorage.getItem("learningPath") || "addition";

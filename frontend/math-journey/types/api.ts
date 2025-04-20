@@ -91,13 +91,6 @@ export enum CPAPhase {
     message: string;
   }
   
-  // Respuestas
-  export interface StartSessionResponse {
-    session_id: string;
-    initial_output: AgentOutput;
-    status: string;
-  }
-  
   export interface ProcessInputResponse {
     session_id: string;
     agent_output: AgentOutput;
@@ -110,8 +103,31 @@ export enum CPAPhase {
     mastery_levels: Record<string, number>;
     current_cpa_phase: string;
     is_active: boolean;
+    // New fields for content loading
+    content_ready: boolean;
+    agent_output?: AgentOutput;
+    error?: string;
     created_at?: number;
     last_updated?: number;
+  }
+  
+  export interface StartSessionResponse {
+    session_id: string;
+    initial_output: AgentOutput;
+    // Added status field to indicate content generation state
+    status: 'initializing' | 'active';
+  }
+  
+  // Make sure AgentOutput has optional is_loading property
+  export interface AgentOutput {
+    text?: string;
+    image_url?: string;
+    audio_url?: string;
+    prompt_for_answer?: boolean;
+    evaluation?: string;
+    feedback_text?: string;
+    is_final_step?: boolean;
+    is_loading?: boolean;
   }
   
   // Información de temas y roadmap

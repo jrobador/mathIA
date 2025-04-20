@@ -1,13 +1,12 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { toast } from "sonner"
-import Link from "next/link"
 import { motion } from "framer-motion"
-import { ArrowLeftIcon, ArrowRightIcon } from "@radix-ui/react-icons"
+import { ArrowRightIcon } from "@radix-ui/react-icons"
 import { useTutor } from "@/contexts/TutorProvider"
 import { EvaluationResult } from "@/types/api"
 import AudioControls from "@/components/audio-controls"
@@ -32,10 +31,16 @@ export default function LessonPage() {
   const [userAnswer, setUserAnswer] = useState("")
   const [isAudioPlaying, setIsAudioPlaying] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  
+  // BUGFIX: Add tracking refs to prevent duplicate session starts
+  const sessionStartAttemptedRef = useRef(false)
+  const userInfoLoadedRef = useRef(false)
 
   // Get user info from localStorage
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && !userInfoLoadedRef.current) {
+      userInfoLoadedRef.current = true; // Mark info as loaded to prevent reloading
+      
       setStudentName(localStorage.getItem("studentName") || "learner")
       setLearningPath(localStorage.getItem("learningPath") || "addition")
       setLearningTheme(localStorage.getItem("learningTheme") || "space")
@@ -44,21 +49,57 @@ export default function LessonPage() {
 
   // Start a session automatically if needed
   useEffect(() => {
-    if (!sessionId && !isTutorLoading && learningPath && studentName) {
-      const diagnosticResultsJson = localStorage.getItem("diagnosticResults")
-      const diagnosticResults = diagnosticResultsJson ? JSON.parse(diagnosticResultsJson) : null
+    const startTutorSession = async () => {
+      // BUGFIX: Check if a start attempt has already been made
+      if (sessionStartAttemptedRef.current) {
+        console.log("Session start already attempted, skipping");
+        return;
+      }
+      
+      // BUGFIX: Check if session is already active or loading
+      if (sessionId || isTutorLoading) {
+        console.log("Session already active or loading, skipping auto-start");
+        return;
+      }
+      
+      // BUGFIX: Check if we have the necessary info to start
+      if (!learningPath || !studentName) {
+        console.log("Missing required info for session start");
+        return;
+      }
+      
+      // Mark that we've attempted to start a session
+      sessionStartAttemptedRef.current = true;
+      console.log("Attempting to start tutor session from LessonPage");
+      
+      try {
+        const diagnosticResultsJson = localStorage.getItem("diagnosticResults")
+        const diagnosticResults = diagnosticResultsJson ? JSON.parse(diagnosticResultsJson) : null
 
-      startSession({
-        theme: learningTheme,
-        learningPath: learningPath,
-        initialMessage: `Hi, I'm ${studentName}. Let's start learning ${learningPath}!`,
-        diagnosticResults: diagnosticResults?.question_results
-      }).catch(error => {
+        await startSession({
+          theme: learningTheme,
+          learningPath: learningPath,
+          initialMessage: `Hi, I'm ${studentName}. Let's start learning ${learningPath}!`,
+          diagnosticResults: diagnosticResults?.question_results
+        });
+        
+        console.log("Session started successfully from LessonPage");
+      } catch (error) {
         console.error("Auto-start session failed:", error)
         toast("Failed to start the learning session. Please try refreshing.", { duration: 5000 })
-      })
+        
+        // Reset the flag if we failed, so we can try again if needed
+        setTimeout(() => {
+          sessionStartAttemptedRef.current = false;
+        }, 5000);
+      }
+    };
+    
+    // Only run this effect once when component mounts and data is ready
+    if (!sessionStartAttemptedRef.current && !sessionId && !isTutorLoading && learningPath && studentName) {
+      startTutorSession();
     }
-  }, [sessionId, isTutorLoading, startSession, learningPath, learningTheme, studentName])
+  }, [sessionId, isTutorLoading, startSession, learningPath, learningTheme, studentName]);
 
   // Handle submitting an answer
   const handleSubmitAnswer = async () => {

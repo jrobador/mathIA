@@ -9,6 +9,7 @@ from app.agent.nodes import ( # Import the node functions defined in another fil
     evaluate_answer,
     provide_targeted_feedback,
     check_advance_topic,
+    wait_for_input
 )
 
 def route_based_on_next(state: StudentSessionState) -> str:
@@ -56,6 +57,8 @@ def build_math_tutor_graph() -> StateGraph:
     graph.add_node("evaluate_answer", evaluate_answer)
     graph.add_node("provide_targeted_feedback", provide_targeted_feedback)
     graph.add_node("check_advance_topic", check_advance_topic)
+    # BUGFIX: Add wait_for_input node
+    graph.add_node("wait_for_input", wait_for_input)
 
     # --- Define Edges (Transitions between nodes) ---
 
@@ -74,15 +77,16 @@ def build_math_tutor_graph() -> StateGraph:
             "present_independent_practice": "present_independent_practice",
             "provide_targeted_feedback": "provide_targeted_feedback",
             "check_advance_topic": "check_advance_topic",
-            "evaluate_answer": "evaluate_answer",  # Added this line to make evaluate_answer reachable
+            "evaluate_answer": "evaluate_answer",
+            "wait_for_input": "wait_for_input",  # BUGFIX: Add edge to wait_for_input
             END: END  # Direct mapping to the END constant for termination
         }
     )
 
     # Add edges from practice nodes to the determine_next_step node
-    # We removed the direct connection to evaluate_answer
     graph.add_edge("present_guided_practice", "determine_next_step")
-    graph.add_edge("present_independent_practice", "determine_next_step")
+    
+    # BUGFIX: No edge from present_independent_practice - it now goes to wait_for_input
 
     # Conditional edges for 'check_advance_topic' node
     # This node can either loop back to the decision node or end the graph.
@@ -102,6 +106,8 @@ def build_math_tutor_graph() -> StateGraph:
     
     # The evaluate_answer node should also return to determine_next_step after processing
     graph.add_edge("evaluate_answer", "determine_next_step")
+    
+    # BUGFIX: wait_for_input has no outgoing edges, it's a terminal node for each session iteration
 
     print("Graph built successfully.")
     return graph

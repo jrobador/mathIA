@@ -30,15 +30,24 @@ async def determine_next_step(state: StudentSessionState) -> Dict[str, Any]:
     last_evaluation = state.get("last_evaluation")
     error_feedback_given_count = state.get("error_feedback_given_count", 0)
     
-    # Decision logic tree
-    next_node = "present_theory"  # Default action
+    # BUGFIX: Check if we've already presented theory for this topic
+    theory_presented_for_topics = state.get("theory_presented_for_topics", [])
+    theory_already_presented = current_topic in theory_presented_for_topics
     
-    # If mastery is low and we haven't just shown theory
-    if mastery < 0.3 and last_action_type != "present_theory":
+    # Debug state for troubleshooting
+    print(f"STATE: Topic={current_topic}, Mastery={mastery}, Last action={last_action_type}")
+    print(f"STATE: Theory presented for topics: {theory_presented_for_topics}")
+    
+    # Decision logic tree
+    next_node = "present_guided_practice"  # Default to guided practice instead of theory
+    
+    # BUGFIX: Modified decision logic for more robust loop prevention
+    # If mastery is low and we haven't just shown theory AND we haven't shown theory for this topic yet
+    if mastery < 0.3 and last_action_type != "present_theory" and not theory_already_presented:
         next_node = "present_theory"
     
-    # If mastery is low but we just showed theory
-    elif mastery < 0.3 and last_action_type == "present_theory":
+    # If mastery is low but we just showed theory or have already shown theory for this topic
+    elif mastery < 0.3 and (last_action_type == "present_theory" or theory_already_presented):
         next_node = "present_guided_practice"
     
     # If mastery is medium or there are some consecutive correct answers
@@ -56,7 +65,11 @@ async def determine_next_step(state: StudentSessionState) -> Dict[str, Any]:
     # If there are multiple consecutive errors
     elif consecutive_incorrect >= 3:
         # Go back to theory or simplify
-        next_node = "present_theory"
+        if not theory_already_presented:  # Only go back to theory if we haven't shown it
+            next_node = "present_theory"
+        else:  # Otherwise, try guided practice
+            next_node = "present_guided_practice"
+            
         # We could also go back in the CPA phase if in ABSTRACT
         if state.get("current_cpa_phase") == CPAPhase.ABSTRACT.value:
             state["current_cpa_phase"] = CPAPhase.PICTORIAL.value
@@ -68,6 +81,11 @@ async def determine_next_step(state: StudentSessionState) -> Dict[str, Any]:
     # If mastery is reasonable
     elif mastery >= 0.3:
          next_node = "present_independent_practice"
+
+    # Final safety check to prevent going to theory twice in a row
+    if next_node == "present_theory" and last_action_type == "present_theory":
+        print(f"WARNING: Detected potential loop - was about to go back to present_theory after just showing theory.")
+        next_node = "present_guided_practice"
 
     print(f"Decision: Next node = {next_node}")
     return {"next": next_node}
@@ -81,6 +99,13 @@ async def present_theory(state: StudentSessionState) -> Dict[str, Any]:
     current_topic = state.get("current_topic", "fractions_introduction")
     current_cpa_phase = state.get("current_cpa_phase", CPAPhase.CONCRETE.value)
     personalized_theme = state.get("personalized_theme", "space")
+    
+    # BUGFIX: Check if we've already presented theory for this topic to prevent infinite loops
+    theory_presented_for_topics = state.get("theory_presented_for_topics", [])
+    if current_topic in theory_presented_for_topics:
+        print(f"WARNING: Theory was already presented for {current_topic}. Avoiding loop by switching to guided practice.")
+        # Force progression to guided practice to break potential infinite loop
+        return {"next": "present_guided_practice"}
     
     # Use the theory prompty template
     theory_template_path = os.path.join(PROMPTS_DIR, "theory.prompty")
@@ -115,6 +140,13 @@ async def present_theory(state: StudentSessionState) -> Dict[str, Any]:
     state["last_action_type"] = "present_theory"
     state["consecutive_incorrect"] = 0 # Reset consecutive incorrect count
     state["error_feedback_given_count"] = 0 # Reset feedback count
+    
+    # BUGFIX: Track topics that have had theory presented
+    theory_presented_for_topics = state.get("theory_presented_for_topics", [])
+    if current_topic not in theory_presented_for_topics:
+        theory_presented_for_topics.append(current_topic)
+    state["theory_presented_for_topics"] = theory_presented_for_topics
+    print(f"Added {current_topic} to theory_presented_for_topics: {theory_presented_for_topics}")
 
     # Prepare the output data to be sent to the frontend
     current_step_output = {
@@ -207,6 +239,12 @@ async def present_independent_practice(state: StudentSessionState) -> Dict[str, 
     to the student's current mastery level.
     """
     print("Executing present_independent_practice...")
+    
+    # BUGFIX: Check if we've already presented a practice problem
+    if state.get("last_action_type") == "present_independent_practice":
+        print(f"WARNING: Practice problem was already presented. Avoiding generating another one.")
+        return {"next": "determine_next_step"}
+    
     current_topic = state.get("current_topic", "fractions_introduction")
     current_cpa_phase = state.get("current_cpa_phase", CPAPhase.CONCRETE.value)
     personalized_theme = state.get("personalized_theme", "space")
@@ -268,9 +306,23 @@ async def present_independent_practice(state: StudentSessionState) -> Dict[str, 
     # Update the state with the output
     state["current_step_output"] = current_step_output
     
-    # Changed: Return to determine_next_step instead of evaluate_answer
-    # This prevents automatic evaluation before getting user input
-    return {"next": "determine_next_step"}
+    # BUGFIX: Use 'wait_for_input' as the next step to break the loop
+    # This will be a special node that doesn't trigger any action and waits for user input
+    return {"next": "wait_for_input"}
+
+async def wait_for_input(state: StudentSessionState) -> Dict[str, Any]:
+    """
+    A placeholder node that signals the graph to pause execution and wait for user input.
+    This node doesn't perform any action except preventing the graph from continuing to execute.
+    
+    Returns:
+        A dict with no 'next' key, to signal that the graph should stop execution.
+    """
+    print("Waiting for user input...")
+    
+    # Do not specify a 'next' key, which will cause the graph to pause execution
+    # Deliberately return an empty dict or one without a 'next' key
+    return {}
 
 async def evaluate_answer(state: StudentSessionState) -> Dict[str, Any]:
     """
@@ -556,3 +608,4 @@ async def check_advance_topic(state: StudentSessionState) -> Dict[str, Any]:
         
         print(f"Completed roadmap {roadmap_id}")
         return {"next": "__end__"}
+    
