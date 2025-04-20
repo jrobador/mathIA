@@ -1,7 +1,6 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import AudioControls from "@/components/audio-controls"
 import LessonVisual from "@/components/lesson-visual"
@@ -9,7 +8,6 @@ import { motion } from "framer-motion"
 import { ArrowLeftIcon, ArrowRightIcon } from "@radix-ui/react-icons"
 
 export default function LessonPage() {
-  const router = useRouter()
   const [studentName, setStudentName] = useState("")
   const [learningPath, setLearningPath] = useState("")
   const [learningTheme, setLearningTheme] = useState("")
@@ -68,7 +66,16 @@ export default function LessonPage() {
   }
 
   // Example lesson steps for addition
-  const lessonSteps = [
+  const lessonSteps: {
+    title: string
+    visual: "concrete" | "pictorial" | "abstract" | "interactive"
+    audioText: string
+    visualData: {
+      type: string
+      values: number[]
+      showCombined?: boolean
+    }
+  }[] = [
     {
       title: "Introduction to Addition",
       visual: "concrete",

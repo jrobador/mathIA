@@ -5,12 +5,25 @@ import { useRouter } from "next/navigation"
 import AudioControls from "@/components/audio-controls"
 import ProgressDots from "@/components/progress-dots"
 import { motion } from "framer-motion"
+import { useMathTutor } from "@/hooks/use-math-tutor"
+import { toast } from "sonner"
 
 export default function LearningPathPage() {
   const router = useRouter()
+  const { startSession } = useMathTutor()
+
+  // States
   const [isAudioPlaying, setIsAudioPlaying] = useState(false)
   const [isAudioComplete, setIsAudioComplete] = useState(false)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
+  const [studentName, setStudentName] = useState("")
+  const [studentLevel, setStudentLevel] = useState("")
+
+  // Get diagnostic data from localStorage to use with API later
+  useEffect(() => {
+    setStudentName(localStorage.getItem("studentName") || "friend")
+    setStudentLevel(localStorage.getItem("studentLevel") || "beginner")
+  }, [])
 
   // Auto-play audio when page loads
   useEffect(() => {
@@ -31,15 +44,33 @@ export default function LearningPathPage() {
     }
   }, [isAudioPlaying])
 
-  const handlePathSelect = (path: string) => {
+  const handlePathSelect = async (path: string) => {
     setSelectedPath(path)
+
     // Store selected path
     localStorage.setItem("learningPath", path)
 
-    // Navigate to theme selection after a brief delay
-    setTimeout(() => {
+    try {
+      // Pre-initialize session
+      const diagnosticResultsJson = localStorage.getItem("diagnosticResults")
+      const diagnosticResults = diagnosticResultsJson ? JSON.parse(diagnosticResultsJson) : null
+
+      // Start session in background while navigating
+      startSession({
+        learning_path: path,
+        diagnostic_results: diagnosticResults,
+        initial_message: `Hi, I'm ${studentName}. I want to learn ${path}.`
+      }).catch((error: unknown) => {
+        console.error("Error starting session:", error)
+        // No need to show toast here, since we're navigating away
+      })
+
+      // Navigate to theme selection
       router.push("/theme")
-    }, 500)
+    } catch (error) {
+      console.error("Error selecting path:", error)
+      toast("Couldn't start the session. Please try again.")
+    }
   }
 
   const handlePlayAudio = () => {
@@ -68,6 +99,13 @@ export default function LearningPathPage() {
       color: "from-purple-500 to-purple-600",
       icon: "×",
     },
+    {
+      id: "fractions",
+      title: "Fractions",
+      description: "Learn about parts of a whole",
+      color: "from-yellow-500 to-yellow-600",
+      icon: "½",
+    },
   ]
 
   return (
@@ -90,14 +128,27 @@ export default function LearningPathPage() {
           animate={{ opacity: 1, y: 0 }}
           className="text-3xl md:text-4xl font-bold text-indigo-600 mb-6 text-center"
         >
-          What would you like to learn today?
+          What would you like to learn today, {studentName}?
         </motion.h1>
+
+        <motion.p
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.2 }}
+          className="text-lg text-gray-700 mb-8 text-center"
+        >
+          {studentLevel === "advanced" ? 
+            "Based on your diagnostic, you're ready for advanced concepts!" :
+            studentLevel === "intermediate" ?
+            "Your diagnostic shows you have a good foundation to build on." :
+            "Let's build your math skills starting with the fundamentals!"}
+        </motion.p>
 
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
-          className="w-full grid grid-cols-1 md:grid-cols-3 gap-6 mb-8"
+          className="w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8"
         >
           {learningPaths.map((path, index) => (
             <motion.div
@@ -115,7 +166,7 @@ export default function LearningPathPage() {
                   <span className="text-6xl font-bold text-white">{path.icon}</span>
                 </div>
                 <div className="p-6">
-                  <h3 className="text-2xl font-bold text-gray-800 mb-2">{path.title}</h3>
+                  <h3 className="text-xl font-bold text-gray-800 mb-2">{path.title}</h3>
                   <p className="text-gray-600">{path.description}</p>
                 </div>
               </div>
@@ -126,7 +177,11 @@ export default function LearningPathPage() {
         <AudioControls
           isPlaying={isAudioPlaying}
           onPlay={handlePlayAudio}
-          audioText="What would you like to learn today? Choose a math topic that interests you."
+          audioText={`What would you like to learn today, ${studentName}? Choose a math topic that interests you. Your diagnostic showed ${
+            studentLevel === "advanced" ? "you have a solid understanding of math concepts." :
+            studentLevel === "intermediate" ? "you're comfortable with several math concepts." : 
+            "we should build your foundation step by step."
+          }`}
         />
       </div>
     </main>

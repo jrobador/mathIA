@@ -4,7 +4,7 @@ import { useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
-import { useToast } from "@/hooks/use-toast"
+import { toast } from "sonner"
 import { HelpCircle } from "lucide-react"
 import Link from "next/link"
 import ChatDisplay from "@/components/chat-display"
@@ -16,7 +16,6 @@ import { useSession } from "@/hooks/use-session"
 import { ArrowLeftIcon } from "@radix-ui/react-icons"
 
 export default function SessionPage() {
-  const { toast } = useToast()
   const { sessionId, messages, currentVisual, currentAudio, feedback, isLoading, progress, startSession, sendMessage } =
     useSession()
 
@@ -33,11 +32,7 @@ export default function SessionPage() {
     try {
       await sendMessage(input)
     } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to send your message. Please try again.",
-        variant: "destructive",
-      })
+      toast("Failed to send your message. Please try again.")
     }
   }
 
