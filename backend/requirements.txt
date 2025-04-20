@@ -10,3 +10,5 @@ pydantic
 requests
 uuid
 azure-cognitiveservices-speech
+PyYAML
+aiohttp

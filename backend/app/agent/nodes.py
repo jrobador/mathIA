@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 from typing import Dict, Any
 from app.agent.state import StudentSessionState, EvaluationOutcome, CPAPhase 
-from app.services.azure_openai import invoke_with_prompty # New prompty-based LLM service
+from app.services.azure_openai import invoke_with_prompty 
 from app.services.azure_speech import generate_speech
-from backend.app.services.azure_image import generate_image
+from app.services.azure_image import generate_image
 from langchain_core.messages import HumanMessage
 from app.agent.roadmap import get_roadmap, get_next_topic_id
 import re

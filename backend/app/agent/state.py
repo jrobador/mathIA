@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from typing import Dict, List, Any, Optional, TypedDict, Union
 from enum import Enum
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 # ----- Enums for the model -----
 class CPAPhase(str, Enum):
