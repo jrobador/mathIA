@@ -1,6 +1,7 @@
-from langgraph.graph import StateGraph, END
-from app.agent.state import StudentSessionState
-from app.agent.nodes import (
+# -*- coding: utf-8 -*-
+from langgraph.graph import StateGraph, END # Core LangGraph classes for building stateful graphs
+from app.agent.state import StudentSessionState # The defined state object for the graph
+from app.agent.nodes import ( # Import the node functions defined in another file
     determine_next_step,
     present_theory,
     present_guided_practice,
@@ -12,29 +13,42 @@ from app.agent.nodes import (
 
 def route_based_on_next(state: StudentSessionState) -> str:
     """
-    Determina el siguiente nodo basado en el valor de 'next' en el estado.
-    Esta función se usa para el enrutamiento condicional en el grafo.
+    Determines the next node to execute based on the 'next' value stored in the state.
+    This function is used for conditional routing within the graph.
+    
+    Args:
+        state: The current state of the graph.
+        
+    Returns:
+        A string representing the name of the next node to execute, or END.
     """
-    next_node = state.get("next")
+    next_node = state.get("next") # Get the 'next' value set by the previous node
+    
     if not next_node:
-        # Fallback si no hay 'next' definido
+        # Fallback if 'next' is not defined in the state (should generally not happen if nodes set it)
         print("Warning: No 'next' key found in state. Defaulting to determine_next_step.")
         return "determine_next_step"
     
-    # Para manejar el caso especial de finalización
+    # To handle the special case of graph termination
     if next_node == "__end__":
-        return END
+        return END # Use the special END constant from LangGraph
     
+    # Otherwise, return the name of the node specified in 'next'
     return next_node
 
 def build_math_tutor_graph() -> StateGraph:
     """
-    Construye y retorna el grafo del agente tutor de matemáticas.
+    Builds and returns the StateGraph for the math tutor agent.
+    Defines the nodes and edges of the conversational flow.
+    
+    Returns:
+        A configured StateGraph instance.
     """
     print("Building the math tutor graph...")
-    graph = StateGraph(StudentSessionState)
+    graph = StateGraph(StudentSessionState) # Initialize the graph with the defined state structure
 
-    # Añadir nodos
+    # Add nodes to the graph
+    # Each node is associated with an async function that modifies the state
     graph.add_node("determine_next_step", determine_next_step)
     graph.add_node("present_theory", present_theory)
     graph.add_node("present_guided_practice", present_guided_practice)
@@ -43,52 +57,76 @@ def build_math_tutor_graph() -> StateGraph:
     graph.add_node("provide_targeted_feedback", provide_targeted_feedback)
     graph.add_node("check_advance_topic", check_advance_topic)
 
-    # --- Definir Bordes ---
+    # --- Define Edges (Transitions between nodes) ---
 
-    # Punto de entrada
+    # Set the entry point of the graph
     graph.set_entry_point("determine_next_step")
 
-    # Bordes condicionales desde el nodo de decisión principal
+    # Conditional edges from the main decision node ('determine_next_step')
+    # The 'route_based_on_next' function will inspect the state and decide which node to go to next.
     graph.add_conditional_edges(
-        "determine_next_step",
-        route_based_on_next,  # Función para determinar la ruta basada en 'next'
+        "determine_next_step", # Source node
+        route_based_on_next,   # Function to determine the route based on state['next']
         {
+            # Mapping from the value returned by 'route_based_on_next' to the target node name
             "present_theory": "present_theory",
             "present_guided_practice": "present_guided_practice",
             "present_independent_practice": "present_independent_practice",
             "provide_targeted_feedback": "provide_targeted_feedback",
             "check_advance_topic": "check_advance_topic",
-            END: END  # Mapeo directo al END constante
+            END: END  # Direct mapping to the END constant for termination
         }
     )
 
-    # Bordes condicionales para check_advance_topic
+    # Conditional edges for 'check_advance_topic' node
+    # This node can either loop back to the decision node or end the graph.
     graph.add_conditional_edges(
-        "check_advance_topic",
-        route_based_on_next,
+        "check_advance_topic", # Source node
+        route_based_on_next,   # Routing function
         {
-            "determine_next_step": "determine_next_step",
-            END: END
+            # Possible outcomes set in state['next'] by check_advance_topic
+            "determine_next_step": "determine_next_step", # Go back to decide next action for new topic
+            END: END # End the graph if roadmap is complete
         }
     )
 
-    # Bordes simples desde nodos hacia determine_next_step
+    # Simple edges from nodes that always lead back to the main decision node
     graph.add_edge("present_theory", "determine_next_step")
     graph.add_edge("provide_targeted_feedback", "determine_next_step")
     
-    # El nodo evaluate_answer también debería volver a determine_next_step
+    # The evaluate_answer node should also return to determine_next_step after processing
     graph.add_edge("evaluate_answer", "determine_next_step")
 
-    # Los nodos que requieren input del usuario (present_guided_practice, present_independent_practice)
-    # no tienen bordes automáticos. La API gestionará esto como se describe abajo.
+    # Nodes requiring user input ('present_guided_practice', 'present_independent_practice')
+    # do not have automatic outgoing edges defined here. 
+    # The typical pattern is:
+    # 1. These nodes execute and prepare output for the user (prompt_for_answer=True).
+    # 2. The graph execution pauses (implicitly returns control to the caller/API).
+    # 3. The API sends the output to the frontend and waits for the user's response.
+    # 4. When the user responds, the API adds the response to the state's message history 
+    #    and re-invokes the graph, usually starting from the 'evaluate_answer' node 
+    #    (or potentially back to 'determine_next_step' which then routes to evaluation).
+    # This external loop (API interaction) handles the pause for user input.
 
     print("Graph built successfully.")
     return graph
 
+# Singleton pattern: Build and compile the graph once to improve performance for subsequent requests.
+_compiled_app = None
+
 def get_compiled_app():
     """
-    Construye el grafo y lo compila una sola vez para reutilizarlo.
-    Útil para reutilizar la estructura del grafo entre sesiones.
+    Builds the graph and compiles it once for reuse.
+    Subsequent calls will return the already compiled application.
+    Useful for reusing the graph structure efficiently between sessions/requests.
+    
+    Returns:
+        The compiled LangGraph application.
     """
-    graph = build_math_tutor_graph()
-    return graph.compile()
+    global _compiled_app
+    if _compiled_app is None:
+        print("Compiling graph for the first time...")
+        graph = build_math_tutor_graph()
+        _compiled_app = graph.compile()
+        print("Graph compiled.")
+    return _compiled_app

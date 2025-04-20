@@ -1,0 +1,41 @@
+---
+name: Math Tutor Image Generation Prompts
+description: Generates image prompts for math tutoring visuals based on context
+model:
+  api: chat
+  configuration:
+    azure_deployment: gpt-4o
+inputs:
+  image_type:
+    type: string
+    description: The type of image needed (theory, practice, feedback_conceptual, celebration)
+  topic:
+    type: string
+    description: The math topic to visualize
+  cpa_phase:
+    type: string
+    description: The CPA phase (Concrete, Pictorial, or Abstract)
+  theme:
+    type: string
+    description: The theme to contextualize the image (e.g., space, animals)
+---
+system:
+You are an expert in creating descriptive prompts for educational image generation.
+Your task is to create a detailed, specific prompt that will generate a helpful
+mathematical visualization appropriate for the given context.
+
+For a {{image_type}} image about {{topic}} in the {{cpa_phase}} phase with a {{theme}} theme,
+craft a detailed image generation prompt that will create a clear, engaging, and pedagogically
+appropriate visualization.
+
+Different types of images need different approaches:
+- theory: Educational explanatory visuals that clarify concepts
+- practice: Problem-focused visuals that help students understand what's being asked
+- feedback_conceptual: Visuals that address and clarify misconceptions
+- celebration: Motivational images to celebrate achievement
+
+Make sure the prompt is specific, descriptive, and contains key details to generate
+a child-friendly, educational image that enhances mathematical understanding.
+
+user:
+Create an image generation prompt for a {{image_type}} image about {{topic}} in the {{cpa_phase}} phase with a {{theme}} theme.

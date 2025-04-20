@@ -1,6 +1,13 @@
+"""
+Azure OpenAI Service Integration
+
+This module provides production-ready integration with Azure OpenAI services
+for the math tutoring agent using prompty templates.
+"""
+
+import os
+import yaml
 from app.core.config import settings
-from langchain_core.messages import SystemMessage
-import asyncio
 
 # Initialize the client once
 llm_client = None
@@ -8,6 +15,7 @@ llm_client = None
 async def initialize_client():
     """
     Initialize the Azure OpenAI client if not already done.
+    Uses either API key or Azure AD authentication based on available credentials.
     """
     global llm_client
     if llm_client is not None:
@@ -15,134 +23,242 @@ async def initialize_client():
         
     if settings.API_HOST == "azure" and settings.AZURE_OPENAI_ENDPOINT:
         # Import here to avoid loading these modules unless needed
-        from langchain_openai import AzureChatOpenAI
-        from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+        from openai import AsyncAzureOpenAI
+        from azure.identity import DefaultAzureCredential
         
-        # Configure auth: Choose Key or AAD
-        if settings.AZURE_OPENAI_API_KEY:
-             llm_client = AzureChatOpenAI(
-                 azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
-                 openai_api_version=settings.AZURE_OPENAI_API_VERSION,
-                 azure_deployment=settings.AZURE_OPENAI_CHAT_DEPLOYMENT,
-                 openai_api_key=settings.AZURE_OPENAI_API_KEY,
-                 temperature=0.2, # Adjust as needed
-             )
-             print(f"Initialized Azure OpenAI client with API key")
-        elif settings.AZURE_TENANT_ID:
-             token_provider = get_bearer_token_provider(
-                 DefaultAzureCredential(), 
-                 "https://cognitiveservices.azure.com/.default"
-             )
-             llm_client = AzureChatOpenAI(
-                 azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
-                 openai_api_version=settings.AZURE_OPENAI_API_VERSION,
-                 azure_deployment=settings.AZURE_OPENAI_CHAT_DEPLOYMENT,
-                 azure_ad_token_provider=token_provider,
-                 temperature=0.2, # Adjust as needed
-            )
-             print(f"Initialized Azure OpenAI client with AAD auth")
-        else:
-             print("Warning: Azure OpenAI client not fully configured.")
+        try:
+            # Configure auth based on available credentials
+            if settings.AZURE_OPENAI_API_KEY:
+                # API Key authentication
+                llm_client = AsyncAzureOpenAI(
+                    azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
+                    api_version=settings.AZURE_OPENAI_API_VERSION,
+                    api_key=settings.AZURE_OPENAI_API_KEY,
+                )
+                print(f"Initialized Azure OpenAI client with API key")
+            elif settings.AZURE_TENANT_ID:
+                # Azure AD authentication
+                credential = DefaultAzureCredential()
+                token = credential.get_token("https://cognitiveservices.azure.com/.default")
+                
+                llm_client = AsyncAzureOpenAI(
+                    azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
+                    api_version=settings.AZURE_OPENAI_API_VERSION,
+                    azure_ad_token=token.token,
+                )
+                print(f"Initialized Azure OpenAI client with Azure AD authentication")
+            else:
+                print("Warning: Neither Azure OpenAI API key nor Azure AD credentials are configured.")
+        except Exception as e:
+            print(f"Error initializing Azure OpenAI client: {e}")
+            llm_client = None
     
     return llm_client
 
-async def invoke_llm(messages: list, system_prompt: str | None = None) -> str:
+class PromptyTemplate:
+    def __init__(self, template_path: str):
+        """
+        Initialize a prompty template from a file.
+        
+        Args:
+            template_path: Path to the prompty template file
+        """
+        self.template_path = template_path
+        self.name = None
+        self.description = None
+        self.model_config = {}
+        self.inputs = {}
+        self.messages = []
+        
+        # Load and parse the template
+        self.load_template()
+    
+    def load_template(self):
+        """
+        Load and parse the prompty template file.
+        """
+        try:
+            with open(self.template_path, 'r', encoding='utf-8') as f:
+                template_content = f.read()
+            
+            # Split into frontmatter and messages
+            parts = template_content.split('---')
+            if len(parts) < 3:
+                raise ValueError(f"Invalid prompty template format in {self.template_path}")
+            
+            # Parse YAML frontmatter
+            frontmatter = yaml.safe_load(parts[1])
+            
+            # Extract metadata
+            self.name = frontmatter.get('name')
+            self.description = frontmatter.get('description')
+            self.model_config = frontmatter.get('model', {})
+            self.inputs = frontmatter.get('inputs', {})
+            
+            # Parse message templates
+            messages_section = parts[2].strip()
+            
+            # Split into role sections
+            current_role = None
+            current_content = []
+            
+            for line in messages_section.split('\n'):
+                if line.strip() in ['system:', 'user:', 'assistant:']:
+                    # Save previous section if exists
+                    if current_role is not None:
+                        self.messages.append({
+                            'role': current_role,
+                            'content': '\n'.join(current_content).strip()
+                        })
+                        current_content = []
+                    
+                    # Start new section
+                    current_role = line.strip()[:-1]  # Remove the colon
+                else:
+                    current_content.append(line)
+            
+            # Add the last section
+            if current_role is not None:
+                self.messages.append({
+                    'role': current_role,
+                    'content': '\n'.join(current_content).strip()
+                })
+                
+        except Exception as e:
+            print(f"Error loading prompty template {self.template_path}: {e}")
+            raise
+    
+    def fill_template(self, **kwargs):
+        """
+        Fill the template with the provided variables.
+        
+        Args:
+            **kwargs: Values for the template variables
+            
+        Returns:
+            List of filled message dictionaries
+        """
+        filled_messages = []
+        
+        for msg in self.messages:
+            content = msg['content']
+            
+            # Replace variables
+            for key, value in kwargs.items():
+                placeholder = f"{{{{{key}}}}}"
+                content = content.replace(placeholder, str(value))
+            
+            filled_messages.append({
+                'role': msg['role'],
+                'content': content
+            })
+        
+        return filled_messages
+
+async def invoke_with_prompty(template_path: str, **kwargs) -> str:
     """
-    Invokes the Azure OpenAI LLM with the given messages and system prompt.
+    Invokes the Azure OpenAI LLM using a prompty template.
+    
+    Args:
+        template_path: Path to the prompty template file
+        **kwargs: Values for the template variables
+        
+    Returns:
+        Response text from the model
     """
     # Ensure client is initialized
     client = await initialize_client()
     
     if not client:
-        print("LLM client not available, using simulated response")
-        return simulate_response(messages, system_prompt)
+        raise Exception("LLM client not available. Check Azure OpenAI configuration.")
     
     try:
-        # Prepare messages with system prompt if provided
-        api_messages = []
-        if system_prompt:
-            api_messages.append(SystemMessage(content=system_prompt))
+        # Load and fill the template
+        template = PromptyTemplate(template_path)
+        messages = template.fill_template(**kwargs)
         
-        # Add the provided messages
-        api_messages.extend(messages)
+        # Make the API call
+        response = await client.chat.completions.create(
+            model=settings.AZURE_OPENAI_CHAT_DEPLOYMENT,
+            messages=messages,
+            temperature=0.2,
+        )
         
-        # Call the LLM
-        response = await client.ainvoke(api_messages)
-        return response.content
+        return response.choices[0].message.content
         
     except Exception as e:
-        print(f"Error invoking LLM: {e}")
-        # Return a fallback response
-        return simulate_response(messages, system_prompt)
+        print(f"Error using prompty template {template_path}: {e}")
+        raise
 
-def simulate_response(messages: list, system_prompt: str | None = None) -> str:
+async def stream_with_prompty(template_path: str, **kwargs):
     """
-    Provides a simulated response for testing when the LLM is not available.
+    Streams responses from Azure OpenAI using a prompty template.
+    
+    Args:
+        template_path: Path to the prompty template file
+        **kwargs: Values for the template variables
+        
+    Yields:
+        Response text chunks as they become available
     """
-    print(f"--- Simulating LLM Call ---")
-    if system_prompt:
-        print(f"System: {system_prompt}")
-    for msg in messages:
-        print(f"{msg.type.capitalize()}: {msg.content}")
-    print(f"---------------------------")
+    # Ensure client is initialized
+    client = await initialize_client()
+    
+    if not client:
+        raise Exception("LLM client not available. Check Azure OpenAI configuration.")
+    
+    try:
+        # Load and fill the template
+        template = PromptyTemplate(template_path)
+        messages = template.fill_template(**kwargs)
+        
+        # Stream the response
+        stream = await client.chat.completions.create(
+            model=settings.AZURE_OPENAI_CHAT_DEPLOYMENT,
+            messages=messages,
+            temperature=0.2,
+            stream=True,
+        )
+        
+        # Yield chunks as they arrive
+        async for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+                
+    except Exception as e:
+        print(f"Error streaming from prompty template {template_path}: {e}")
+        raise
 
-    # Get the last message content
-    last_message_content = messages[-1].content if messages else ""
-
-    # Generate appropriate simulated responses based on the content
-    if "Explícame sobre" in last_message_content:
-        topic = messages[0].content.split('sobre ')[-1] if 'sobre ' in messages[0].content else "este tema"
-        return f"""
-        Claro, vamos a aprender sobre {topic}.
+# Function to get a list of available prompty templates
+def get_available_templates(templates_dir="prompts"):
+    """
+    Gets a list of available prompty templates.
+    
+    Args:
+        templates_dir: Directory containing prompty templates
         
-        Este concepto es muy importante en matemáticas. Primero, debemos entender que las matemáticas son una forma de entender el mundo a través de patrones y relaciones numéricas.
-        
-        Cuando trabajamos con {topic}, estamos desarrollando habilidades de razonamiento lógico y resolución de problemas que son útiles en muchas situaciones de la vida real.
-        """
-    elif "Crea un ejercicio guiado" in last_message_content:
-        topic = messages[0].content.split('sobre ')[-1] if 'sobre ' in messages[0].content else "este tema"
-        return f"""
-        Aquí tienes un ejercicio guiado sobre {topic}:
-        
-        Imagina que tenemos 5 estrellas y necesitamos dividirlas en grupos iguales.
-        ¿Cuántas estrellas tendríamos en cada grupo si formamos 5 grupos?
-        
-        ===SOLUCIÓN PARA EVALUACIÓN===
-        
-        Para resolver este problema:
-        1. Tenemos 5 estrellas en total
-        2. Queremos dividirlas en 5 grupos iguales
-        3. Por lo tanto, cada grupo tendrá 5 ÷ 5 = 1 estrella
-        
-        La respuesta es 1 estrella por grupo.
-        """
-    elif "Crea un ejercicio independiente" in last_message_content:
-        topic = messages[0].content.split('sobre ')[-1] if 'sobre ' in messages[0].content else "este tema"
-        return f"""
-        Resuelve el siguiente problema sobre {topic}:
-        
-        Si tienes 12 planetas y los quieres organizar en 3 sistemas solares iguales, ¿cuántos planetas habrá en cada sistema solar?
-        
-        ===SOLUCIÓN PARA EVALUACIÓN===
-        
-        Para resolver este problema de división:
-        1. Tenemos 12 planetas en total
-        2. Queremos dividirlos en 3 sistemas solares iguales
-        3. Por lo tanto, cada sistema solar tendrá 12 ÷ 3 = 4 planetas
-        
-        La respuesta es 4 planetas por sistema solar.
-        """
-    elif "Evalúa la respuesta" in last_message_content:
-        # Extract the student's answer from the message
-        student_answer_line = next((line for line in last_message_content.split('\n') if line.startswith("Respuesta del estudiante:")), "")
-        student_answer = student_answer_line.split(":")[-1].strip() if student_answer_line else ""
-        
-        # For simulation, assume common answers are correct
-        if student_answer in ["4", "1", "3", "5", "10"]:
-            return "[RESULTADO: Correct]\n¡Muy bien! Has entendido correctamente el concepto y has aplicado la operación matemática de forma adecuada."
-        elif student_answer.isdigit():
-            return "[RESULTADO: Incorrect_Calculation]\nTu enfoque es correcto, pero parece que hubo un pequeño error en el cálculo. Revisa los números una vez más."
-        else:
-            return "[RESULTADO: Incorrect_Conceptual]\nParece que hay una confusión con el concepto. Recuerda que cuando dividimos, estamos repartiendo cantidades en grupos iguales."
-    else:
-        return "Lo siento, no estoy seguro de cómo responder a esa pregunta específica. ¿Podrías reformularla o darme más detalles sobre lo que necesitas?"
+    Returns:
+        Dictionary mapping template names to file paths
+    """
+    templates = {}
+    
+    try:
+        for filename in os.listdir(templates_dir):
+            if filename.endswith(".prompty"):
+                filepath = os.path.join(templates_dir, filename)
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    parts = content.split('---')
+                    if len(parts) >= 2:
+                        frontmatter = yaml.safe_load(parts[1])
+                        name = frontmatter.get('name')
+                        if name:
+                            templates[name] = filepath
+                except Exception as e:
+                    print(f"Error parsing template {filepath}: {e}")
+    except Exception as e:
+        print(f"Error loading templates from {templates_dir}: {e}")
+    
+    return templates

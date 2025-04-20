@@ -1,24 +1,25 @@
+# -*- coding: utf-8 -*-
 """
-Define las rutas de aprendizaje (roadmaps) para diferentes temas matemáticos.
-Cada roadmap contiene la secuencia de temas y los requisitos para avanzar.
+Defines learning paths (roadmaps) for different mathematical topics.
+Each roadmap contains the sequence of topics and the requirements for progression.
 """
 
 from typing import Dict, List, Any, Optional
 
 class RoadmapTopic:
     """
-    Representa un tema dentro de una ruta de aprendizaje.
+    Represents a topic within a learning roadmap.
     """
     def __init__(
         self, 
         id: str, 
         title: str, 
         description: str,
-        cpa_phases: List[str] = ["Concrete", "Pictorial", "Abstract"],
-        prerequisites: List[str] = None,
-        required_mastery: float = 0.8,
-        practice_problems_min: int = 3,
-        subtopics: Optional[List[str]] = None
+        cpa_phases: List[str] = ["Concrete", "Pictorial", "Abstract"], # Concrete, Pictorial, Abstract phases (CPA approach)
+        prerequisites: Optional[List[str]] = None, # List of topic IDs that must be mastered before this one
+        required_mastery: float = 0.8, # Required score (e.g., 80%) to consider the topic mastered
+        practice_problems_min: int = 3, # Minimum number of practice problems to attempt
+        subtopics: Optional[List[str]] = None # Optional list of sub-concepts within this topic
     ):
         self.id = id
         self.title = title
@@ -30,7 +31,7 @@ class RoadmapTopic:
         self.subtopics = subtopics or []
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convierte el tema a un diccionario."""
+        """Converts the topic to a dictionary."""
         return {
             "id": self.id,
             "title": self.title,
@@ -44,320 +45,320 @@ class RoadmapTopic:
 
 class LearningRoadmap:
     """
-    Define una ruta de aprendizaje completa con una secuencia de temas.
+    Defines a complete learning roadmap with a sequence of topics.
     """
     def __init__(self, id: str, title: str, description: str, topics: List[RoadmapTopic]):
         self.id = id
         self.title = title
         self.description = description
-        self.topics = topics
+        self.topics = topics # The list of topics in the roadmap, ordered sequentially
     
     def get_topic_ids(self) -> List[str]:
-        """Retorna la lista de IDs de temas en la ruta."""
+        """Returns the list of topic IDs in the roadmap."""
         return [topic.id for topic in self.topics]
     
     def get_topic_by_id(self, topic_id: str) -> Optional[RoadmapTopic]:
-        """Busca un tema por su ID."""
+        """Finds a topic by its ID."""
         for topic in self.topics:
             if topic.id == topic_id:
                 return topic
-        return None
+        return None # Return None if topic ID is not found
     
     def get_next_topic(self, current_topic_id: str) -> Optional[RoadmapTopic]:
-        """Obtiene el siguiente tema en la secuencia."""
+        """Gets the next topic in the sequence."""
         topic_ids = self.get_topic_ids()
         try:
             current_index = topic_ids.index(current_topic_id)
-            if current_index < len(topic_ids) - 1:
+            if current_index < len(topic_ids) - 1: # Check if it's not the last topic
                 next_id = topic_ids[current_index + 1]
                 return self.get_topic_by_id(next_id)
-        except ValueError:
+        except ValueError: # Handle case where current_topic_id is not in the list
             pass
-        return None
+        return None # Return None if it's the last topic or ID not found
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convierte la ruta a un diccionario."""
+        """Converts the roadmap to a dictionary."""
         return {
             "id": self.id,
             "title": self.title,
             "description": self.description,
-            "topics": [topic.to_dict() for topic in self.topics]
+            "topics": [topic.to_dict() for topic in self.topics] # Convert each topic to its dictionary representation
         }
 
-# ----- Definición de Roadmaps -----
+# ----- Roadmap Definitions -----
 
-# Roadmap de Fracciones
+# Fractions Roadmap
 fractions_roadmap = LearningRoadmap(
     id="fractions",
-    title="Fracciones",
-    description="Aprende sobre fracciones, desde los conceptos básicos hasta operaciones avanzadas.",
+    title="Fractions",
+    description="Learn about fractions, from basic concepts to advanced operations.",
     topics=[
         RoadmapTopic(
             id="fractions_introduction",
-            title="Introducción a las Fracciones",
-            description="Qué son las fracciones y cómo representan partes de un todo.",
-            subtopics=["Concepto de fracción", "Numerador y denominador", "Representación visual"]
+            title="Introduction to Fractions",
+            description="What fractions are and how they represent parts of a whole.",
+            subtopics=["Concept of a fraction", "Numerator and denominator", "Visual representation"]
         ),
         RoadmapTopic(
             id="fractions_equivalent",
-            title="Fracciones Equivalentes",
-            description="Cómo identificar y crear fracciones equivalentes.",
+            title="Equivalent Fractions",
+            description="How to identify and create equivalent fractions.",
             prerequisites=["fractions_introduction"],
-            subtopics=["Simplificación", "Amplificación", "Comparación de fracciones"]
+            subtopics=["Simplification", "Expansion", "Comparing fractions"] # "Amplificación" translated as "Expansion"
         ),
         RoadmapTopic(
             id="fractions_comparison",
-            title="Comparación de Fracciones",
-            description="Cómo comparar fracciones y ordenarlas.",
+            title="Comparing Fractions",
+            description="How to compare fractions and order them.",
             prerequisites=["fractions_equivalent"],
-            subtopics=["Común denominador", "Método de cruz", "Comparación con referentes"]
+            subtopics=["Common denominator", "Cross-multiplication method", "Comparison using benchmarks"] # "Método de cruz" -> "Cross-multiplication method", "Comparación con referentes" -> "Comparison using benchmarks"
         ),
         RoadmapTopic(
             id="fractions_addition",
-            title="Suma de Fracciones",
-            description="Cómo sumar fracciones con igual y distinto denominador.",
+            title="Adding Fractions",
+            description="How to add fractions with like and unlike denominators.",
             prerequisites=["fractions_equivalent", "fractions_comparison"],
-            subtopics=["Mismo denominador", "Distinto denominador", "Fracciones mixtas"]
+            subtopics=["Like denominators", "Unlike denominators", "Mixed numbers"]
         ),
         RoadmapTopic(
             id="fractions_subtraction",
-            title="Resta de Fracciones",
-            description="Cómo restar fracciones con igual y distinto denominador.",
+            title="Subtracting Fractions",
+            description="How to subtract fractions with like and unlike denominators.",
             prerequisites=["fractions_addition"],
-            subtopics=["Mismo denominador", "Distinto denominador", "Fracciones mixtas"]
+            subtopics=["Like denominators", "Unlike denominators", "Mixed numbers"]
         ),
         RoadmapTopic(
             id="fractions_multiplication",
-            title="Multiplicación de Fracciones",
-            description="Cómo multiplicar fracciones y números mixtos.",
+            title="Multiplying Fractions",
+            description="How to multiply fractions and mixed numbers.",
             prerequisites=["fractions_subtraction"],
-            subtopics=["Multiplicación directa", "Con números enteros", "Con números mixtos"]
+            subtopics=["Direct multiplication", "With whole numbers", "With mixed numbers"]
         ),
         RoadmapTopic(
             id="fractions_division",
-            title="División de Fracciones",
-            description="Cómo dividir fracciones y números mixtos.",
+            title="Dividing Fractions",
+            description="How to divide fractions and mixed numbers.",
             prerequisites=["fractions_multiplication"],
-            subtopics=["Recíproco o inverso", "División por enteros", "División de números mixtos"]
+            subtopics=["Reciprocal or inverse", "Division by whole numbers", "Division of mixed numbers"]
         )
     ]
 )
 
-# Roadmap de Suma
+# Addition Roadmap
 addition_roadmap = LearningRoadmap(
     id="addition",
-    title="Suma",
-    description="Aprende a sumar, desde conceptos básicos hasta sumas con llevadas y múltiples dígitos.",
+    title="Addition",
+    description="Learn to add, from basic concepts to addition with carrying and multiple digits.",
     topics=[
         RoadmapTopic(
             id="addition_introduction",
-            title="Introducción a la Suma",
-            description="Qué significa sumar y cómo combinar cantidades.",
-            subtopics=["Concepto de adición", "Signos y símbolos", "Propiedades básicas"]
+            title="Introduction to Addition",
+            description="What addition means and how to combine quantities.",
+            subtopics=["Concept of addition", "Signs and symbols", "Basic properties"]
         ),
         RoadmapTopic(
             id="addition_single_digit",
-            title="Suma de Un Dígito",
-            description="Cómo sumar números de un solo dígito de manera fluida.",
+            title="Single-Digit Addition",
+            description="How to fluently add single-digit numbers.",
             prerequisites=["addition_introduction"],
-            subtopics=["Combinaciones básicas", "Estrategias mentales", "Hechos numéricos"]
+            subtopics=["Basic combinations", "Mental strategies", "Number facts"]
         ),
         RoadmapTopic(
             id="addition_double_digit",
-            title="Suma de Dos Dígitos",
-            description="Cómo sumar números de dos dígitos sin llevada.",
+            title="Double-Digit Addition",
+            description="How to add two-digit numbers without carrying.",
             prerequisites=["addition_single_digit"],
-            subtopics=["Valor posicional", "Método vertical", "Estimación"]
+            subtopics=["Place value", "Vertical method", "Estimation"]
         ),
         RoadmapTopic(
             id="addition_carrying",
-            title="Suma con Llevada",
-            description="Cómo sumar números cuando la suma de una columna es mayor a 9.",
+            title="Addition with Carrying",
+            description="How to add numbers when the sum of a column is greater than 9.",
             prerequisites=["addition_double_digit"],
-            subtopics=["Concepto de llevada", "Método paso a paso", "Aplicaciones prácticas"]
+            subtopics=["Concept of carrying", "Step-by-step method", "Practical applications"]
         ),
         RoadmapTopic(
             id="addition_multiple_digit",
-            title="Suma de Múltiples Dígitos",
-            description="Cómo sumar números grandes de manera eficiente.",
+            title="Multi-Digit Addition",
+            description="How to efficiently add large numbers.",
             prerequisites=["addition_carrying"],
-            subtopics=["Alineación de columnas", "Llevadas múltiples", "Estimación de resultados"]
+            subtopics=["Column alignment", "Multiple carries", "Result estimation"]
         ),
         RoadmapTopic(
             id="addition_mental",
-            title="Suma Mental",
-            description="Estrategias para sumar mentalmente con rapidez.",
+            title="Mental Addition",
+            description="Strategies for quick mental addition.",
             prerequisites=["addition_multiple_digit"],
-            subtopics=["Descomposición", "Redondeo", "Compensación"]
+            subtopics=["Decomposition", "Rounding", "Compensation"]
         ),
         RoadmapTopic(
             id="addition_word_problems",
-            title="Problemas Verbales de Suma",
-            description="Cómo aplicar la suma para resolver problemas prácticos.",
+            title="Addition Word Problems",
+            description="How to apply addition to solve practical problems.",
             prerequisites=["addition_mental"],
-            subtopics=["Identificación de operaciones", "Estrategias de solución", "Verificación de resultados"]
+            subtopics=["Identifying operations", "Solution strategies", "Checking results"]
         )
     ]
 )
 
-# Roadmap de Resta
+# Subtraction Roadmap
 subtraction_roadmap = LearningRoadmap(
     id="subtraction",
-    title="Resta",
-    description="Aprende a restar, desde conceptos básicos hasta restas con llevadas y múltiples dígitos.",
+    title="Subtraction",
+    description="Learn to subtract, from basic concepts to subtraction with borrowing and multiple digits.",
     topics=[
         RoadmapTopic(
             id="subtraction_introduction",
-            title="Introducción a la Resta",
-            description="Qué significa restar y cómo quitar cantidades.",
-            subtopics=["Concepto de sustracción", "Signos y símbolos", "Relación con la suma"]
+            title="Introduction to Subtraction",
+            description="What subtraction means and how to take away quantities.",
+            subtopics=["Concept of subtraction", "Signs and symbols", "Relationship with addition"]
         ),
         RoadmapTopic(
             id="subtraction_single_digit",
-            title="Resta de Un Dígito",
-            description="Cómo restar números de un solo dígito con fluidez.",
+            title="Single-Digit Subtraction",
+            description="How to fluently subtract single-digit numbers.",
             prerequisites=["subtraction_introduction"],
-            subtopics=["Combinaciones básicas", "Estrategias mentales", "Hechos numéricos"]
+            subtopics=["Basic combinations", "Mental strategies", "Number facts"]
         ),
         RoadmapTopic(
             id="subtraction_double_digit",
-            title="Resta de Dos Dígitos",
-            description="Cómo restar números de dos dígitos sin préstamo.",
+            title="Double-Digit Subtraction",
+            description="How to subtract two-digit numbers without borrowing.",
             prerequisites=["subtraction_single_digit"],
-            subtopics=["Valor posicional", "Método vertical", "Estimación"]
+            subtopics=["Place value", "Vertical method", "Estimation"]
         ),
         RoadmapTopic(
             id="subtraction_borrowing",
-            title="Resta con Préstamo",
-            description="Cómo restar cuando el número de arriba es menor que el de abajo.",
+            title="Subtraction with Borrowing", # "Resta con Préstamo" is Subtraction with Borrowing/Regrouping
+            description="How to subtract when the top digit is smaller than the bottom digit.",
             prerequisites=["subtraction_double_digit"],
-            subtopics=["Concepto de préstamo", "Método paso a paso", "Verificación"]
+            subtopics=["Concept of borrowing", "Step-by-step method", "Checking"] # "Verificación" -> "Checking"
         ),
         RoadmapTopic(
             id="subtraction_multiple_digit",
-            title="Resta de Múltiples Dígitos",
-            description="Cómo restar números grandes de manera eficiente.",
+            title="Multi-Digit Subtraction",
+            description="How to efficiently subtract large numbers.",
             prerequisites=["subtraction_borrowing"],
-            subtopics=["Alineación de columnas", "Préstamos múltiples", "Estimación de resultados"]
+            subtopics=["Column alignment", "Multiple borrows", "Result estimation"]
         ),
         RoadmapTopic(
             id="subtraction_mental",
-            title="Resta Mental",
-            description="Estrategias para restar mentalmente con rapidez.",
+            title="Mental Subtraction",
+            description="Strategies for quick mental subtraction.",
             prerequisites=["subtraction_multiple_digit"],
-            subtopics=["Descomposición", "Redondeo", "Método de complemento"]
+            subtopics=["Decomposition", "Rounding", "Complement method"] # "Método de complemento" -> "Complement method"
         ),
         RoadmapTopic(
             id="subtraction_word_problems",
-            title="Problemas Verbales de Resta",
-            description="Cómo aplicar la resta para resolver problemas prácticos.",
+            title="Subtraction Word Problems",
+            description="How to apply subtraction to solve practical problems.",
             prerequisites=["subtraction_mental"],
-            subtopics=["Identificación de operaciones", "Estrategias de solución", "Verificación de resultados"]
+            subtopics=["Identifying operations", "Solution strategies", "Checking results"]
         )
     ]
 )
 
-# Roadmap de Multiplicación
+# Multiplication Roadmap
 multiplication_roadmap = LearningRoadmap(
     id="multiplication",
-    title="Multiplicación",
-    description="Aprende a multiplicar, desde conceptos básicos hasta multiplicaciones con múltiples dígitos.",
+    title="Multiplication",
+    description="Learn to multiply, from basic concepts to multi-digit multiplication.",
     topics=[
         RoadmapTopic(
             id="multiplication_introduction",
-            title="Introducción a la Multiplicación",
-            description="Qué significa multiplicar y su relación con la suma repetida.",
-            subtopics=["Concepto de multiplicación", "Signos y símbolos", "Suma repetida"]
+            title="Introduction to Multiplication",
+            description="What multiplication means and its relationship to repeated addition.",
+            subtopics=["Concept of multiplication", "Signs and symbols", "Repeated addition"]
         ),
         RoadmapTopic(
             id="multiplication_tables",
-            title="Tablas de Multiplicar",
-            description="Cómo aprender y recordar las tablas de multiplicar.",
+            title="Multiplication Tables",
+            description="How to learn and remember the multiplication tables.",
             prerequisites=["multiplication_introduction"],
-            subtopics=["Tablas del 1 al 5", "Tablas del 6 al 10", "Patrones y trucos"]
+            subtopics=["Tables 1-5", "Tables 6-10", "Patterns and tricks"]
         ),
         RoadmapTopic(
             id="multiplication_single_digit",
-            title="Multiplicación por Un Dígito",
-            description="Cómo multiplicar un número de varios dígitos por uno de un dígito.",
+            title="Multiplication by a Single Digit",
+            description="How to multiply a multi-digit number by a single-digit number.",
             prerequisites=["multiplication_tables"],
-            subtopics=["Método vertical", "Llevadas", "Estimación"]
+            subtopics=["Vertical method", "Carrying", "Estimation"]
         ),
         RoadmapTopic(
             id="multiplication_double_digit",
-            title="Multiplicación por Dos Dígitos",
-            description="Cómo multiplicar cuando ambos factores tienen dos o más dígitos.",
+            title="Multiplication by Two Digits",
+            description="How to multiply when both factors have two or more digits.",
             prerequisites=["multiplication_single_digit"],
-            subtopics=["Método vertical extendido", "Productos parciales", "Verificación"]
+            subtopics=["Extended vertical method", "Partial products", "Checking"]
         ),
         RoadmapTopic(
             id="multiplication_mental",
-            title="Multiplicación Mental",
-            description="Estrategias para multiplicar mentalmente con rapidez.",
+            title="Mental Multiplication",
+            description="Strategies for quick mental multiplication.",
             prerequisites=["multiplication_double_digit"],
-            subtopics=["Descomposición", "Uso de múltiplos de 10", "Propiedades"]
+            subtopics=["Decomposition", "Using multiples of 10", "Properties"]
         ),
         RoadmapTopic(
             id="multiplication_word_problems",
-            title="Problemas Verbales de Multiplicación",
-            description="Cómo aplicar la multiplicación para resolver problemas prácticos.",
+            title="Multiplication Word Problems",
+            description="How to apply multiplication to solve practical problems.",
             prerequisites=["multiplication_mental"],
-            subtopics=["Identificación de situaciones", "Estrategias de solución", "Verificación de resultados"]
+            subtopics=["Identifying situations", "Solution strategies", "Checking results"]
         )
     ]
 )
 
-# Roadmap de División
+# Division Roadmap
 division_roadmap = LearningRoadmap(
     id="division",
-    title="División",
-    description="Aprende a dividir, desde conceptos básicos hasta divisiones con múltiples dígitos.",
+    title="Division",
+    description="Learn to divide, from basic concepts to multi-digit division.",
     topics=[
         RoadmapTopic(
             id="division_introduction",
-            title="Introducción a la División",
-            description="Qué significa dividir y su relación con la multiplicación.",
-            subtopics=["Concepto de división", "Signos y símbolos", "Partes de la división"]
+            title="Introduction to Division",
+            description="What division means and its relationship to multiplication.",
+            subtopics=["Concept of division", "Signs and symbols", "Parts of division (dividend, divisor, quotient, remainder)"] # Added standard terms
         ),
         RoadmapTopic(
             id="division_basic",
-            title="División Básica",
-            description="Cómo dividir usando las tablas de multiplicar.",
+            title="Basic Division",
+            description="How to divide using multiplication tables.",
             prerequisites=["division_introduction"],
-            subtopics=["Divisiones exactas", "Relación con multiplicación", "Verificación"]
+            subtopics=["Exact divisions", "Relationship with multiplication", "Checking"]
         ),
         RoadmapTopic(
             id="division_single_digit",
-            title="División por Un Dígito",
-            description="Cómo dividir números por un divisor de un dígito.",
+            title="Division by a Single Digit",
+            description="How to divide numbers by a single-digit divisor.",
             prerequisites=["division_basic"],
-            subtopics=["Algoritmo de división", "División con resto", "Estimación"]
+            subtopics=["Division algorithm (long division)", "Division with remainder", "Estimation"] # Clarified algorithm
         ),
         RoadmapTopic(
             id="division_double_digit",
-            title="División por Dos Dígitos",
-            description="Cómo dividir números por divisores de dos o más dígitos.",
+            title="Division by Two Digits",
+            description="How to divide numbers by two-digit (or more) divisors.",
             prerequisites=["division_single_digit"],
-            subtopics=["Algoritmo extendido", "Estimación de cocientes", "Verificación"]
+            subtopics=["Extended algorithm", "Estimating quotients", "Checking"]
         ),
         RoadmapTopic(
             id="division_decimal",
-            title="División con Decimales",
-            description="Cómo dividir cuando hay decimales en el dividendo o divisor.",
+            title="Division with Decimals",
+            description="How to divide when there are decimals in the dividend or divisor.",
             prerequisites=["division_double_digit"],
-            subtopics=["Desplazamiento decimal", "División decimal", "Aproximaciones"]
+            subtopics=["Decimal placement", "Decimal division", "Approximation"] # "Desplazamiento decimal" -> "Decimal placement"
         ),
         RoadmapTopic(
             id="division_word_problems",
-            title="Problemas Verbales de División",
-            description="Cómo aplicar la división para resolver problemas prácticos.",
+            title="Division Word Problems",
+            description="How to apply division to solve practical problems.",
             prerequisites=["division_decimal"],
-            subtopics=["Identificación de situaciones", "Estrategias de solución", "Verificación de resultados"]
+            subtopics=["Identifying situations", "Solution strategies", "Checking results"]
         )
     ]
 )
 
-# Diccionario de roadmaps disponibles
+# Dictionary of available roadmaps
 AVAILABLE_ROADMAPS = {
     "fractions": fractions_roadmap,
     "addition": addition_roadmap,
@@ -368,41 +369,41 @@ AVAILABLE_ROADMAPS = {
 
 def get_roadmap(roadmap_id: str) -> Optional[LearningRoadmap]:
     """
-    Obtiene un roadmap por su ID.
+    Gets a roadmap by its ID.
     
     Args:
-        roadmap_id: ID del roadmap a obtener
+        roadmap_id: ID of the roadmap to retrieve.
     
     Returns:
-        LearningRoadmap o None si no existe
+        LearningRoadmap or None if it doesn't exist.
     """
     return AVAILABLE_ROADMAPS.get(roadmap_id)
 
 def get_topic_sequence(roadmap_id: str) -> List[str]:
     """
-    Obtiene la secuencia de temas para un roadmap específico.
+    Gets the sequence of topic IDs for a specific roadmap.
     
     Args:
-        roadmap_id: ID del roadmap
+        roadmap_id: ID of the roadmap.
         
     Returns:
-        Lista de IDs de temas en orden secuencial
+        List of topic IDs in sequential order.
     """
     roadmap = get_roadmap(roadmap_id)
     if roadmap:
         return roadmap.get_topic_ids()
-    return []
+    return [] # Return empty list if roadmap not found
 
 def get_next_topic_id(roadmap_id: str, current_topic_id: str) -> Optional[str]:
     """
-    Obtiene el ID del siguiente tema en el roadmap.
+    Gets the ID of the next topic in the roadmap.
     
     Args:
-        roadmap_id: ID del roadmap
-        current_topic_id: ID del tema actual
+        roadmap_id: ID of the roadmap.
+        current_topic_id: ID of the current topic.
     
     Returns:
-        ID del siguiente tema o None si es el último
+        ID of the next topic or None if it's the last one or not found.
     """
     roadmap = get_roadmap(roadmap_id)
     if roadmap:
@@ -413,10 +414,10 @@ def get_next_topic_id(roadmap_id: str, current_topic_id: str) -> Optional[str]:
 
 def get_all_roadmaps_info() -> List[Dict[str, Any]]:
     """
-    Retorna información básica de todos los roadmaps disponibles.
+    Returns basic information about all available roadmaps.
     
     Returns:
-        Lista de diccionarios con información sobre cada roadmap
+        List of dictionaries with information about each roadmap.
     """
     return [
         {
@@ -430,43 +431,50 @@ def get_all_roadmaps_info() -> List[Dict[str, Any]]:
 
 def get_roadmap_topic_info(roadmap_id: str, topic_id: str) -> Optional[Dict[str, Any]]:
     """
-    Obtiene información detallada sobre un tema específico.
+    Gets detailed information about a specific topic within a roadmap.
     
     Args:
-        roadmap_id: ID del roadmap
-        topic_id: ID del tema
+        roadmap_id: ID of the roadmap.
+        topic_id: ID of the topic.
     
     Returns:
-        Diccionario con información del tema o None si no existe
+        Dictionary with topic information or None if the roadmap or topic doesn't exist.
     """
     roadmap = get_roadmap(roadmap_id)
     if not roadmap:
-        return None
+        return None # Roadmap not found
     
     topic = roadmap.get_topic_by_id(topic_id)
     if not topic:
-        return None
+        return None # Topic not found in this roadmap
     
-    # Convertir el tema a diccionario
+    # Convert the topic to a dictionary
     topic_info = topic.to_dict()
     
-    # Añadir información sobre los requisitos previos
+    # Add information about prerequisite topics (ID and Title)
     if topic.prerequisites:
         topic_info['prerequisite_topics'] = []
         for prereq_id in topic.prerequisites:
             prereq_topic = roadmap.get_topic_by_id(prereq_id)
-            if prereq_topic:
+            if prereq_topic: # Ensure the prerequisite topic exists in the roadmap
                 topic_info['prerequisite_topics'].append({
                     'id': prereq_id,
                     'title': prereq_topic.title
                 })
-    
-    # Añadir información sobre el siguiente tema
+            else: # Handle cases where a prerequisite might be defined but not found (data integrity issue)
+                 topic_info['prerequisite_topics'].append({
+                    'id': prereq_id,
+                    'title': f"Prerequisite topic '{prereq_id}' not found"
+                 })
+
+    # Add information about the next topic (ID and Title)
     next_topic = roadmap.get_next_topic(topic_id)
     if next_topic:
         topic_info['next_topic'] = {
             'id': next_topic.id,
             'title': next_topic.title
         }
-    
+    else:
+        topic_info['next_topic'] = None # Explicitly state there's no next topic
+
     return topic_info

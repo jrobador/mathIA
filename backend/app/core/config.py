@@ -17,13 +17,12 @@ class Settings(BaseSettings):
     AZURE_OPENAI_API_VERSION: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
     AZURE_TENANT_ID: str | None = os.getenv("AZURE_TENANT_ID") # For AAD
 
-    # Stability AI (Optional)
-    STABILITY_API_KEY: str | None = os.getenv("STABILITY_API_KEY")
-    STABILITY_API_HOST: str = os.getenv("STABILITY_API_HOST", "https://api.stability.ai")
-    STABILITY_ENGINE_ID: str = os.getenv("STABILITY_ENGINE_ID", "stable-diffusion-ultra")
+    # Image generation
+    AZURE_DALLE_ENDPOINT = os.getenv("AZURE_DALLE_ENDPOINT")
+    AZURE_DALLE_API_KEY = os.getenv("AZURE_DALLE_API_KEY")
 
     # Azure Speech (Optional)
-    AZURE_SPEECH_KEY: str | None = os.getenv("AZURE_SPEECH_KEY")
+    AZURE_SPEECH_SUSCRIPTION_KEY: str | None = os.getenv("AZURE_SPEECH_SUSCRIPTION_KEY")
     AZURE_SPEECH_REGION: str | None = os.getenv("AZURE_SPEECH_REGION")
 
     class Config:

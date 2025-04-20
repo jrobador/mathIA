@@ -9,4 +9,4 @@ python-dotenv
 pydantic
 requests
 uuid
-sse-starlette # For potential streaming later, good to have
+azure-cognitiveservices-speech
