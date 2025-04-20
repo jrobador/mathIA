@@ -1,11 +1,23 @@
-# app/schemas/session.py - Añadir esquemas para diagnóstico
-
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List, Union
+"""
+Esquemas Pydantic para las sesiones del tutor de matemáticas.
+Define los modelos de datos utilizados en la API.
+"""
+from pydantic import BaseModel
+from typing import Optional, Dict, List
 from enum import Enum
-import time
 
-# --- Enumeraciones adicionales ---
+# --- Enumeraciones ---
+
+class CPAPhase(str, Enum):
+    CONCRETE = "Concrete"
+    PICTORIAL = "Pictorial"
+    ABSTRACT = "Abstract"
+
+class EvaluationOutcome(str, Enum):
+    CORRECT = "Correct"
+    INCORRECT_CONCEPTUAL = "Incorrect_Conceptual"
+    INCORRECT_CALCULATION = "Incorrect_Calculation"
+    UNCLEAR = "Unclear"
 
 class DifficultySetting(str, Enum):
     INITIAL = "initial"
@@ -35,12 +47,12 @@ class DiagnosticData(BaseModel):
     recommended_level: DifficultySetting
     question_results: Optional[List[DiagnosticResult]] = None
 
-# --- Actualización de TutorConfig ---
+# --- Configuración del tutor ---
 
 class TutorConfig(BaseModel):
     """Configuración para personalizar el comportamiento del tutor."""
     initial_topic: Optional[str] = None
-    initial_cpa_phase: Optional[str] = None
+    initial_cpa_phase: Optional[CPAPhase] = None
     initial_difficulty: Optional[DifficultySetting] = None
     difficulty_adjustment_rate: Optional[float] = 0.1
     enable_audio: Optional[bool] = True
@@ -48,8 +60,11 @@ class TutorConfig(BaseModel):
     language: Optional[str] = "es"  # Idioma por defecto es español
     diagnostic_score: Optional[float] = None
     diagnostic_details: Optional[List[DiagnosticResult]] = None
+    
+    class Config:
+        use_enum_values = True  # Para serializar enums como sus valores string
 
-# --- Actualización de StartSessionRequest ---
+# --- Esquemas de Solicitud ---
 
 class StartSessionRequest(BaseModel):
     """Solicitud para iniciar una nueva sesión de tutoría."""
@@ -60,6 +75,7 @@ class StartSessionRequest(BaseModel):
     learning_path: Optional[LearningPath] = None
     
     class Config:
+        use_enum_values = True
         schema_extra = {
             "example": {
                 "personalized_theme": "espacio",
@@ -73,132 +89,97 @@ class StartSessionRequest(BaseModel):
             }
         }
 
-# --- Fin de la actualización de esquemas ---
-
-# app/api/endpoints/session.py - Actualización del endpoint start_session
-
-from fastapi import APIRouter, HTTPException, Body, Depends, Query, Response, status
-from app.schemas.session import (
-    StartSessionRequest, StartSessionResponse, ProcessInputResponse, 
-    AgentOutput, DiagnosticData, DifficultySetting, LearningPath
-)
-from app.agent.state import initialize_state
-from app.agent.graph import get_compiled_app
-import time
-import uuid
-
-# Función auxiliar para mapear el camino de aprendizaje a un tema inicial
-def map_learning_path_to_topic(learning_path: Optional[LearningPath]) -> str:
-    """Mapea el camino de aprendizaje seleccionado a un tema inicial."""
-    if not learning_path:
-        return "fractions_introduction"
-        
-    path_to_topic = {
-        LearningPath.FRACTIONS: "fractions_introduction",
-        LearningPath.ADDITION: "addition_introduction",
-        LearningPath.SUBTRACTION: "subtraction_introduction",
-        LearningPath.MULTIPLICATION: "multiplication_introduction",
-        LearningPath.DIVISION: "division_introduction"
-    }
+class ProcessInputRequest(BaseModel):
+    """Solicitud para procesar la entrada del usuario en una sesión activa."""
+    message: str
     
-    return path_to_topic.get(learning_path, "fractions_introduction")
-
-# Función auxiliar para mapear el nivel de dificultad a un nivel inicial de dominio
-def map_difficulty_to_mastery(difficulty: Optional[DifficultySetting]) -> float:
-    """Mapea el nivel de dificultad a un nivel inicial de dominio."""
-    if not difficulty:
-        return 0.1
-        
-    difficulty_to_mastery = {
-        DifficultySetting.INITIAL: 0.1,
-        DifficultySetting.BEGINNER: 0.3,
-        DifficultySetting.INTERMEDIATE: 0.5,
-        DifficultySetting.ADVANCED: 0.7
-    }
-    
-    return difficulty_to_mastery.get(difficulty, 0.1)
-
-# Actualización del endpoint start_session
-@router.post("/start", response_model=StartSessionResponse)
-async def start_session(request: StartSessionRequest = Body(...)):
-    """
-    Inicia una nueva sesión de aprendizaje con el agente tutor.
-    
-    - Genera un ID de sesión único
-    - Inicializa el estado con la configuración proporcionada
-    - Ejecuta el grafo para obtener el primer mensaje
-    
-    Returns:
-        StartSessionResponse: ID de la sesión y salida inicial del agente
-    """
-    try:
-        # Generar ID único para la sesión
-        session_id = str(uuid.uuid4())
-        
-        # Determinar tema inicial basado en el camino de aprendizaje
-        initial_topic = None
-        if request.learning_path:
-            initial_topic = map_learning_path_to_topic(request.learning_path)
-        elif request.config and request.config.initial_topic:
-            initial_topic = request.config.initial_topic
-        
-        # Determinar nivel de dificultad inicial
-        initial_difficulty = None
-        if request.diagnostic_results:
-            initial_difficulty = request.diagnostic_results.recommended_level
-        elif request.config and request.config.initial_difficulty:
-            initial_difficulty = request.config.initial_difficulty
-        
-        # Mapear nivel de dificultad a nivel de dominio inicial
-        initial_mastery = map_difficulty_to_mastery(initial_difficulty)
-        
-        # Crear el estado inicial con tema personalizado
-        initial_state = initialize_state(personalized_theme=request.personalized_theme)
-        
-        # Si hay un tema inicial definido, establecerlo
-        if initial_topic:
-            initial_state["current_topic"] = initial_topic
-            # Inicializar mastery para el tema
-            initial_state["topic_mastery"] = {initial_topic: initial_mastery}
-        
-        # Si hay un mensaje inicial del usuario, añadirlo
-        if request.initial_message:
-            initial_state["messages"] = [HumanMessage(content=request.initial_message)]
-        
-        # Aplicar configuraciones adicionales si se proporcionan
-        if request.config:
-            if request.config.initial_cpa_phase:
-                initial_state["current_cpa_phase"] = request.config.initial_cpa_phase
-        
-        # Ejecutar el grafo con el estado inicial
-        print(f"Starting new session {session_id} with topic: {initial_state['current_topic']}")
-        result_state = await compiled_app.ainvoke(initial_state)
-        
-        # Guardar el estado actualizado
-        active_sessions[session_id] = {
-            "state": result_state, 
-            "created_at": time.time(),
-            "last_updated": time.time()
+    class Config:
+        schema_extra = {
+            "example": {
+                "message": "Creo que la respuesta es 3/4"
+            }
         }
-        
-        # Si había resultados de diagnóstico, guardarlos también
-        if request.diagnostic_results:
-            active_sessions[session_id]["diagnostic_results"] = request.diagnostic_results
-        
-        # Preparar respuesta
-        agent_output = AgentOutput(**result_state.get("current_step_output", {}))
-        
-        return StartSessionResponse(
-            session_id=session_id, 
-            initial_output=agent_output,
-            status="active"
-        )
-        
-    except Exception as e:
-        print(f"Error starting session: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail=f"Failed to start session: {str(e)}"
-        )
+
+# --- Esquemas de Respuesta ---
+
+class FeedbackDetails(BaseModel):
+    """Detalles de retroalimentación específica."""
+    type: Optional[str] = None  # Tipo de feedback (correcto, incorrecto, etc.)
+    message: Optional[str] = None  # Mensaje detallado
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "type": "error_conceptual",
+                "message": "Parece que hay una confusión con el concepto de denominador."
+            }
+        }
+
+class AgentOutput(BaseModel):
+    """Estructura de salida del agente para el frontend."""
+    text: Optional[str] = None  # Texto principal de la respuesta
+    image_url: Optional[str] = None  # URL de imagen generada (si hay)
+    audio_url: Optional[str] = None  # URL de audio generado (si hay)
+    feedback: Optional[FeedbackDetails] = None  # Detalles de feedback específicos
+    prompt_for_answer: Optional[bool] = False  # Indica si espera respuesta
+    evaluation: Optional[EvaluationOutcome] = None  # Resultado de evaluación (si aplica)
+    
+    class Config:
+        use_enum_values = True
+        schema_extra = {
+            "example": {
+                "text": "Vamos a aprender sobre fracciones. Una fracción representa una parte de un todo...",
+                "image_url": "https://example.com/images/fractions.png",
+                "audio_url": "https://example.com/audio/explanation.mp3",
+                "prompt_for_answer": True
+            }
+        }
+
+class StartSessionResponse(BaseModel):
+    """Respuesta a la solicitud de inicio de sesión."""
+    session_id: str  # ID único de la sesión
+    initial_output: AgentOutput  # Primera salida del agente
+    status: str = "active"  # Estado de la sesión
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "session_id": "550e8400-e29b-41d4-a716-446655440000",
+                "initial_output": {
+                    "text": "¡Hola! Vamos a aprender sobre fracciones...",
+                    "image_url": "https://example.com/images/welcome.png"
+                },
+                "status": "active"
+            }
+        }
+
+class ProcessInputResponse(BaseModel):
+    """Respuesta a la solicitud de procesamiento de entrada."""
+    session_id: str  # ID de la sesión
+    agent_output: AgentOutput  # Salida del agente tras procesar la entrada
+    mastery_level: Optional[float] = None  # Nivel de dominio actual (0-1)
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "session_id": "550e8400-e29b-41d4-a716-446655440000",
+                "agent_output": {
+                    "text": "¡Muy bien! Tu respuesta es correcta...",
+                    "prompt_for_answer": False
+                },
+                "mastery_level": 0.6
+            }
+        }
+
+class SessionStatusResponse(BaseModel):
+    """Respuesta con el estado actual de la sesión."""
+    session_id: str
+    current_topic: str
+    mastery_levels: Dict[str, float]
+    current_cpa_phase: CPAPhase
+    is_active: bool
+    created_at: Optional[float] = None
+    last_updated: Optional[float] = None
+    
+    class Config:
+        use_enum_values = True

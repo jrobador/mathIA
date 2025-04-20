@@ -1,19 +1,23 @@
-from fastapi import APIRouter, HTTPException, Body, Depends, Query, Response, status
+"""
+Endpoints de la API para gestionar sesiones del tutor de matemáticas.
+Define las rutas y handlers para interacción con el agente.
+"""
+from fastapi import APIRouter, HTTPException, Body, Query, Response, status
 from app.schemas.session import (
-    StartSessionRequest, StartSessionResponse,
-    ProcessInputRequest, ProcessInputResponse, AgentOutput, 
-    SessionStatusResponse, TutorConfig
+    StartSessionRequest, StartSessionResponse, 
+    ProcessInputRequest, ProcessInputResponse, 
+    AgentOutput, DifficultySetting, 
+    LearningPath, SessionStatusResponse
 )
-from app.agent.graph import build_math_tutor_graph, get_compiled_app
-from app.agent.state import StudentSessionState, initialize_state
-from app.agent.prompts import get_system_prompt, get_image_prompt
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-import uuid
-from typing import Dict, Any, Optional, List
-import asyncio
-import json
+from app.agent.state import initialize_state
+from app.agent.graph import get_compiled_app
+from app.agent.diagnostic import create_diagnostic_result_from_json, apply_diagnostic_to_state
+from langchain_core.messages import HumanMessage
 import time
+import uuid
+from typing import Dict, Any, Optional
 
+# Crear router
 router = APIRouter()
 
 # En producción, usaríamos una base de datos o caché distribuida
@@ -22,6 +26,35 @@ active_sessions: Dict[str, Dict[str, Any]] = {}
 
 # Para rendimiento, compilamos el grafo una vez
 compiled_app = get_compiled_app()
+
+def map_learning_path_to_topic(learning_path: Optional[LearningPath]) -> str:
+    """Mapea el camino de aprendizaje seleccionado a un tema inicial."""
+    if not learning_path:
+        return "fractions_introduction"
+        
+    path_to_topic = {
+        LearningPath.FRACTIONS: "fractions_introduction",
+        LearningPath.ADDITION: "addition_introduction",
+        LearningPath.SUBTRACTION: "subtraction_introduction",
+        LearningPath.MULTIPLICATION: "multiplication_introduction",
+        LearningPath.DIVISION: "division_introduction"
+    }
+    
+    return path_to_topic.get(learning_path, "fractions_introduction")
+
+def map_difficulty_to_mastery(difficulty: Optional[DifficultySetting]) -> float:
+    """Mapea el nivel de dificultad a un nivel inicial de dominio."""
+    if not difficulty:
+        return 0.1
+        
+    difficulty_to_mastery = {
+        DifficultySetting.INITIAL: 0.1,
+        DifficultySetting.BEGINNER: 0.3,
+        DifficultySetting.INTERMEDIATE: 0.5,
+        DifficultySetting.ADVANCED: 0.7
+    }
+    
+    return difficulty_to_mastery.get(difficulty, 0.1)
 
 @router.post("/start", response_model=StartSessionResponse)
 async def start_session(request: StartSessionRequest = Body(...)):
@@ -39,8 +72,31 @@ async def start_session(request: StartSessionRequest = Body(...)):
         # Generar ID único para la sesión
         session_id = str(uuid.uuid4())
         
-        # Crear el estado inicial
+        # Determinar tema inicial basado en el camino de aprendizaje
+        initial_topic = None
+        if request.learning_path:
+            initial_topic = map_learning_path_to_topic(request.learning_path)
+        elif request.config and request.config.initial_topic:
+            initial_topic = request.config.initial_topic
+        
+        # Determinar nivel de dificultad inicial
+        initial_difficulty = None
+        if request.diagnostic_results:
+            initial_difficulty = request.diagnostic_results.recommended_level
+        elif request.config and request.config.initial_difficulty:
+            initial_difficulty = request.config.initial_difficulty
+        
+        # Mapear nivel de dificultad a nivel de dominio inicial
+        initial_mastery = map_difficulty_to_mastery(initial_difficulty)
+        
+        # Crear el estado inicial con tema personalizado
         initial_state = initialize_state(personalized_theme=request.personalized_theme)
+        
+        # Si hay un tema inicial definido, establecerlo
+        if initial_topic:
+            initial_state["current_topic"] = initial_topic
+            # Inicializar mastery para el tema
+            initial_state["topic_mastery"] = {initial_topic: initial_mastery}
         
         # Si hay un mensaje inicial del usuario, añadirlo
         if request.initial_message:
@@ -48,10 +104,15 @@ async def start_session(request: StartSessionRequest = Body(...)):
         
         # Aplicar configuraciones adicionales si se proporcionan
         if request.config:
-            if request.config.initial_topic:
-                initial_state["current_topic"] = request.config.initial_topic
             if request.config.initial_cpa_phase:
                 initial_state["current_cpa_phase"] = request.config.initial_cpa_phase
+        
+        # Si hay diagnóstico, aplicarlo al estado
+        if request.diagnostic_results:
+            diagnostic_dict = request.diagnostic_results.dict()
+            diagnostic_obj = create_diagnostic_result_from_json(diagnostic_dict)
+            if diagnostic_obj:
+                apply_diagnostic_to_state(initial_state, diagnostic_obj)
         
         # Ejecutar el grafo con el estado inicial
         print(f"Starting new session {session_id} with topic: {initial_state['current_topic']}")
@@ -63,6 +124,10 @@ async def start_session(request: StartSessionRequest = Body(...)):
             "created_at": time.time(),
             "last_updated": time.time()
         }
+        
+        # Si había resultados de diagnóstico, guardarlos también
+        if request.diagnostic_results:
+            active_sessions[session_id]["diagnostic_results"] = request.diagnostic_results.dict()
         
         # Preparar respuesta
         agent_output = AgentOutput(**result_state.get("current_step_output", {}))
@@ -81,7 +146,6 @@ async def start_session(request: StartSessionRequest = Body(...)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail=f"Failed to start session: {str(e)}"
         )
-
 
 @router.post("/{session_id}/process", response_model=ProcessInputResponse)
 async def process_input(
@@ -128,7 +192,6 @@ async def process_input(
         if last_output.get("prompt_for_answer", False):
             print(f"User provided answer for session {session_id}. Evaluating...")
             # Asegurar que el siguiente paso sea evaluar la respuesta
-            # Este es un enfoque simplificado - el grafo normalmente determinaría esto
             current_state["next"] = "evaluate_answer"
         
         # Ejecutar el grafo con el estado actualizado
@@ -144,6 +207,10 @@ async def process_input(
         # Preparar respuesta
         agent_output = AgentOutput(**result_state.get("current_step_output", {}))
         
+        # Obtener nivel de dominio actual
+        current_topic = result_state.get("current_topic", "")
+        mastery_level = result_state.get("topic_mastery", {}).get(current_topic, 0.0)
+        
         # Logging para rendimiento
         processing_time = time.time() - start_time
         print(f"Processed input in {processing_time:.2f} seconds")
@@ -155,7 +222,7 @@ async def process_input(
         return ProcessInputResponse(
             session_id=session_id, 
             agent_output=agent_output,
-            mastery_level=result_state.get("topic_mastery", {}).get(result_state.get("current_topic", ""), 0.0)
+            mastery_level=mastery_level
         )
         
     except Exception as e:
@@ -166,7 +233,6 @@ async def process_input(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail=f"Failed to process input: {str(e)}"
         )
-
 
 @router.get("/{session_id}/status", response_model=SessionStatusResponse)
 async def get_session_status(session_id: str):
@@ -191,7 +257,7 @@ async def get_session_status(session_id: str):
     # Extraer información relevante del estado
     current_topic = current_state.get("current_topic", "")
     topic_mastery = current_state.get("topic_mastery", {})
-    current_cpa_phase = current_state.get("current_cpa_phase", "")
+    current_cpa_phase = current_state.get("current_cpa_phase", "Concrete")
     
     return SessionStatusResponse(
         session_id=session_id,
@@ -202,7 +268,6 @@ async def get_session_status(session_id: str):
         created_at=session_data.get("created_at"),
         last_updated=session_data.get("last_updated")
     )
-
 
 @router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def end_session(session_id: str):
@@ -225,7 +290,6 @@ async def end_session(session_id: str):
     del active_sessions[session_id]
     
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
 
 @router.post("/{session_id}/feedback", status_code=status.HTTP_202_ACCEPTED)
 async def submit_session_feedback(
@@ -250,7 +314,7 @@ async def submit_session_feedback(
     # En un sistema real, guardaríamos este feedback en una base de datos
     print(f"Received feedback for session {session_id}: Rating {rating}, Comments: {comments}")
     
-    # Podríamos añadir el feedback al estado de la sesión para referencia
+    # Añadir el feedback al estado de la sesión para referencia
     session_data = active_sessions[session_id]
     if "feedback" not in session_data:
         session_data["feedback"] = []
@@ -262,7 +326,6 @@ async def submit_session_feedback(
     })
     
     return {"message": "Feedback received. Thank you!"}
-
 
 # Endpoint de limpieza periódica (para mantenimiento)
 @router.post("/maintenance/cleanup", status_code=status.HTTP_200_OK)
