@@ -1,187 +1,274 @@
 "use client"
 
-import { useEffect, useState, useMemo } from "react"
+import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { toast } from "sonner"
-import { HelpCircle, Info } from "lucide-react"
 import Link from "next/link"
-import ChatDisplay from "@/components/chat-display"
-import VisualDisplay from "@/components/visual-display" // Use the correct component
-import AudioPlayer from "@/components/audio-player"
-import InputBox from "@/components/input-box"
-import FeedbackDisplay from "@/components/feedback-display"
+import { motion } from "framer-motion"
+import { ArrowLeftIcon, ArrowRightIcon } from "@radix-ui/react-icons"
 import { useTutor } from "@/contexts/TutorProvider"
-import { ArrowLeftIcon } from "@radix-ui/react-icons"
-import { EvaluationResult } from "@/types/api" // Import necessary types
-
-// Define the structure expected by VisualDisplay
-interface VisualProp {
-  url: string;
-  alt: string;
-  // Type is removed as we only get URL from backend
-}
+import { EvaluationResult } from "@/types/api"
+import AudioControls from "@/components/audio-controls"
 
 export default function LessonPage() {
-  // *** Use the Tutor context hook ***
+  const router = useRouter()
+  
+  // Use the TutorContext
   const {
     sessionId,
-    messages, // Use messages from context
-    currentOutput, // Use currentOutput from context
-    isLoading,
-    masteryLevel, // Use masteryLevel from context
+    currentOutput,
+    isLoading: isTutorLoading,
+    masteryLevel,
     startSession,
     sendMessage,
-  } = useTutor();
+  } = useTutor()
 
-  // --- State derived from context ---
+  // Local state
   const [studentName, setStudentName] = useState("")
   const [learningPath, setLearningPath] = useState("")
   const [learningTheme, setLearningTheme] = useState("")
+  const [userAnswer, setUserAnswer] = useState("")
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
 
+  // Get user info from localStorage
   useEffect(() => {
-    setStudentName(localStorage.getItem("studentName") || "learner")
-    setLearningPath(localStorage.getItem("learningPath") || "addition")
-    setLearningTheme(localStorage.getItem("learningTheme") || "space")
+    if (typeof window !== 'undefined') {
+      setStudentName(localStorage.getItem("studentName") || "learner")
+      setLearningPath(localStorage.getItem("learningPath") || "addition")
+      setLearningTheme(localStorage.getItem("learningTheme") || "space")
+    }
   }, [])
 
   // Start a session automatically if needed
   useEffect(() => {
-    if (!sessionId && !isLoading && learningPath && studentName) {
-      const diagnosticResultsJson = localStorage.getItem("diagnosticResults");
-      const diagnosticResults = diagnosticResultsJson ? JSON.parse(diagnosticResultsJson) : null;
+    if (!sessionId && !isTutorLoading && learningPath && studentName) {
+      const diagnosticResultsJson = localStorage.getItem("diagnosticResults")
+      const diagnosticResults = diagnosticResultsJson ? JSON.parse(diagnosticResultsJson) : null
 
       startSession({
         theme: learningTheme,
         learningPath: learningPath,
         initialMessage: `Hi, I'm ${studentName}. Let's start learning ${learningPath}!`,
-        diagnosticResults: diagnosticResults?.question_results // Pass only the results part if needed by the API schema
+        diagnosticResults: diagnosticResults?.question_results
       }).catch(error => {
-        console.error("Auto-start session failed:", error);
-        toast("Failed to start the learning session. Please try refreshing.", { duration: 5000 });
-      });
+        console.error("Auto-start session failed:", error)
+        toast("Failed to start the learning session. Please try refreshing.", { duration: 5000 })
+      })
     }
-  }, [sessionId, isLoading, startSession, learningPath, learningTheme, studentName]);
+  }, [sessionId, isTutorLoading, startSession, learningPath, learningTheme, studentName])
 
-  const handleSubmit = async (input: string) => {
-    if (!input.trim()) return
+  // Handle submitting an answer
+  const handleSubmitAnswer = async () => {
+    if (!userAnswer.trim()) return
 
+    setIsLoading(true)
+    
     try {
-      await sendMessage(input)
+      // Send the student's answer to the backend
+      await sendMessage(userAnswer)
+      
+      // Clear the input field after sending
+      setUserAnswer("")
     } catch (error) {
-      console.error("Error sending message:", error);
-      toast("Failed to send your message. Please try again.")
+      console.error("Error sending answer:", error)
+      toast("Failed to send your answer. Please try again.")
+    } finally {
+      setIsLoading(false)
     }
   }
 
-  // --- Derive component props from currentOutput ---
-  const derivedVisual: VisualProp | undefined = useMemo(() => {
-    if (currentOutput?.image_url) {
-      return {
-        url: currentOutput.image_url,
-        alt: currentOutput.text?.substring(0, 50) || "Math visual aid", // Generate basic alt text
-        // Type is removed
-      };
-    }
-    return undefined;
-  }, [currentOutput]);
-
-  const derivedAudio: string | undefined = useMemo(() => {
-    return currentOutput?.audio_url;
-  }, [currentOutput]);
-
-  const derivedFeedback: { type: "correct" | "incorrect" | "hint"; message: string } | null = useMemo(() => {
-    if (currentOutput?.evaluation) {
-      const evaluation = currentOutput.evaluation as EvaluationResult;
-      const message = currentOutput.feedback?.message || currentOutput.text || "Let's continue!";
-
-      if (evaluation === EvaluationResult.CORRECT) {
-        return { type: "correct", message: message || "Excellent work!" };
-      } else if (evaluation === EvaluationResult.INCORRECT_CALCULATION || evaluation === EvaluationResult.INCORRECT_CONCEPTUAL) {
-        return { type: "incorrect", message: message || "That wasn't quite right. Take another look." };
-      } else { // UNCLEAR or other
-        return { type: "hint", message: message || "Let's try that again." };
+  // Handle number input for answer field
+  const handleNumberInput = (input: string) => {
+    if (input === "clear") {
+      setUserAnswer("")
+    } else if (input === "backspace") {
+      setUserAnswer(prev => prev.slice(0, -1))
+    } else {
+      // Limit input length
+      if (userAnswer.length < 10) {
+        setUserAnswer(prev => prev + input)
       }
     }
-    return null;
-  }, [currentOutput]);
+  }
 
-  const progress = useMemo(() => {
-    // Convert mastery level (0.0 - 1.0) to percentage (0 - 100)
-    return Math.round(masteryLevel * 100);
-  }, [masteryLevel]);
+  // Progress calculation (0-100)
+  const progress = Math.round((masteryLevel || 0) * 100)
+
+  // Theme-based styling
+  const getThemeStyles = () => {
+    switch (learningTheme) {
+      case "magic":
+        return {
+          primaryColor: "text-purple-700",
+          bgGradient: "from-purple-50 to-indigo-100",
+          accentColor: "bg-purple-600",
+          buttonColor: "bg-purple-600 hover:bg-purple-700",
+          borderColor: "border-purple-200"
+        }
+      case "royalty":
+        return {
+          primaryColor: "text-blue-700",
+          bgGradient: "from-blue-50 to-indigo-100",
+          accentColor: "bg-blue-600",
+          buttonColor: "bg-blue-600 hover:bg-blue-700",
+          borderColor: "border-blue-200"
+        }
+      case "heroes":
+        return {
+          primaryColor: "text-red-600",
+          bgGradient: "from-red-50 to-orange-100",
+          accentColor: "bg-red-600",
+          buttonColor: "bg-red-600 hover:bg-red-700",
+          borderColor: "border-red-200"
+        }
+      default:
+        return {
+          primaryColor: "text-indigo-700",
+          bgGradient: "from-indigo-50 to-white",
+          accentColor: "bg-indigo-600",
+          buttonColor: "bg-indigo-600 hover:bg-indigo-700",
+          borderColor: "border-indigo-200"
+        }
+    }
+  }
+
+  const themeStyles = getThemeStyles()
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-indigo-50 to-white p-4">
-      <div className="max-w-6xl mx-auto">
-        <header className="flex justify-between items-center mb-6">
-          <Link href="/learning-path"> {/* Link back to path selection */}
-            <Button variant="ghost" className="flex items-center text-indigo-700">
-              <ArrowLeftIcon className="mr-2 h-4 w-4" /> Back to Topics
-            </Button>
-          </Link>
-          {sessionId && (
-             <div className="flex items-center gap-2 text-sm text-gray-500">
-                <Info size={16} /> Session ID: {sessionId.substring(0, 8)}...
-             </div>
-          )}
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-600">Need help?</span>
-            <Button variant="outline" size="sm" className="text-indigo-700">
-              <HelpCircle className="h-4 w-4 mr-1" /> Help
-            </Button>
-          </div>
-        </header>
+    <main className={`min-h-screen flex flex-col items-center justify-center bg-gradient-to-b ${themeStyles.bgGradient} p-4 relative overflow-hidden`}>
+      {/* Background image */}
+      <div className="absolute inset-0 z-0">
+        <div className="absolute inset-0 bg-gradient-to-b from-indigo-900/30 to-indigo-900/60 mix-blend-multiply" />
+        <img
+          src="/images/learning-background.png"
+          alt="Magical learning background"
+          className="w-full h-full object-cover"
+        />
+      </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left column - Chat and Input */}
-          <div className="lg:col-span-2 space-y-4">
-            <Card className="p-4 h-[calc(70vh-2rem)] flex flex-col shadow-lg border border-indigo-100">
-              <div className="flex-grow overflow-y-auto mb-4 scrollbar-thin scrollbar-thumb-indigo-200 scrollbar-track-gray-100">
-                <ChatDisplay messages={messages} isLoading={isLoading} />
-              </div>
-              <div>
-                {/* Pass derived state to InputBox */}
-                <InputBox onSubmit={handleSubmit} isLoading={isLoading} />
-              </div>
-            </Card>
-
-            {/* Use derivedFeedback */}
-            {derivedFeedback && (
-              <Card className="p-4 shadow-md border border-indigo-100">
-                <FeedbackDisplay feedback={derivedFeedback} />
-              </Card>
-            )}
-          </div>
-
-          {/* Right column - Visual, Audio, Progress */}
-          <div className="space-y-4">
-            <Card className="p-4 shadow-md border border-indigo-100">
-              <h3 className="text-lg font-medium mb-3 text-indigo-700">Visual Aid</h3>
-              {/* Pass derivedVisual to VisualDisplay */}
-              <VisualDisplay visual={derivedVisual} />
-            </Card>
-
-            {/* Use derivedAudio */}
-            {derivedAudio && (
-              <Card className="p-4 shadow-md border border-indigo-100">
-                <h3 className="text-lg font-medium mb-3 text-indigo-700">Audio Explanation</h3>
-                <AudioPlayer audioUrl={derivedAudio} autoPlay={true} />
-              </Card>
-            )}
-
-            <Card className="p-4 shadow-md border border-indigo-100">
-              <h3 className="text-lg font-medium mb-3 text-indigo-700">Your Progress</h3>
-              {/* Use derived progress */}
-              <Progress value={progress} className="h-2 mb-2" />
-              <p className="text-sm text-gray-600">
-                Mastery: {progress}%{" "}
-                {progress < 33 ? "🌱" : progress < 66 ? "🌳" : "⭐"}
-              </p>
-            </Card>
+      {/* Main container */}
+      <div className="max-w-4xl w-full flex flex-col items-center z-10 bg-white/30 backdrop-blur-md rounded-3xl p-4 md:p-6 border border-white/40 shadow-xl overflow-hidden">
+        {/* Header navigation */}
+        <div className="w-full flex justify-between items-center mb-4">
+          <div className={`text-sm ${themeStyles.primaryColor}`}>
+            {learningPath && learningPath.charAt(0).toUpperCase() + learningPath.slice(1)} Journey
           </div>
         </div>
+
+        {/* Progress indicator */}
+        <div className="w-full max-w-md mb-4">
+          <div className="flex justify-between text-sm text-gray-600 mb-1">
+            <span>Your progress</span>
+            <span>{progress}%</span>
+          </div>
+          <Progress value={progress} className="h-2 bg-gray-200" />
+          <div className="flex justify-end mt-1">
+            <span className="text-sm text-gray-600">
+              {progress < 33 ? "🌱 Just starting" : progress < 66 ? "🌳 Growing" : "⭐ Mastering"}
+            </span>
+          </div>
+        </div>
+
+        {/* Content Area */}
+        <motion.div
+          key={currentOutput?.evaluation ? 'evaluation' : 'content'}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className={`w-full max-w-3xl bg-white rounded-2xl shadow-xl my-4 md:my-6 relative border ${themeStyles.borderColor} overflow-hidden p-4 md:p-6 min-h-[400px] md:min-h-[450px] flex flex-col justify-between`}
+        >
+          {currentOutput?.evaluation ? (
+            // Evaluation view - when the backend has evaluated an answer
+            <div className="flex flex-col justify-center items-center h-full text-center">
+              <h1 className={`text-2xl md:text-3xl font-bold ${
+                currentOutput.evaluation === EvaluationResult.CORRECT ? "text-green-700" : "text-orange-700"
+              } mb-3`}>
+                {currentOutput.evaluation === EvaluationResult.CORRECT ? "Great job!" : "Not quite right"}
+              </h1>
+              <p className="text-base md:text-lg text-gray-800 mb-3">
+                {currentOutput.text}
+              </p>
+            </div>
+          ) : (
+            // Standard content view - shows content and input when needed
+            <div className="flex flex-col justify-between h-full">
+              {/* Top part: Content from backend */}
+              <div className="text-center">
+                <h1 className={`text-xl md:text-2xl font-bold ${themeStyles.primaryColor} mb-4`}>
+                  {currentOutput?.text || "Loading your math lesson..."}
+                </h1>
+                
+                {/* Visual element (if provided by backend) */}
+                {currentOutput?.image_url && (
+                  <div className="mb-6 flex justify-center">
+                    <div className="relative h-[200px] w-full max-w-md rounded-lg overflow-hidden border border-gray-200">
+                      <img 
+                        src={currentOutput.image_url} 
+                        alt="Math visual"
+                        className="w-full h-full object-contain" 
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              {/* Only show input when backend requests an answer */}
+              {currentOutput?.prompt_for_answer && (
+                <div className="mt-4">
+                  <div className="flex justify-center items-center mb-4">
+                    <div className={`flex items-center justify-center bg-indigo-100 rounded-xl px-4 md:px-6 py-2 md:py-3 min-w-[120px] md:min-w-[140px] h-[50px] md:h-[60px] border ${themeStyles.borderColor} shadow-sm`}>
+                      <span className="text-2xl md:text-3xl font-bold text-indigo-900">{userAnswer || "_"}</span>
+                    </div>
+                  </div>
+                  
+                  {/* Number pad */}
+                  <div className="w-full max-w-[280px] md:max-w-[320px] mx-auto grid grid-cols-3 gap-2">
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, "clear", 0, "backspace"].map((btn) => (
+                      <Button
+                        key={btn}
+                        variant={btn === "clear" ? "destructive" : "outline"}
+                        className={`h-12 text-lg font-medium ${
+                          btn === "clear"
+                            ? "bg-red-500/80 hover:bg-red-600/90 border border-red-400/30"
+                            : "bg-white/80 backdrop-blur-sm border-indigo-100/60 hover:bg-indigo-50/90"
+                        }`}
+                        onClick={() => handleNumberInput(btn.toString())}
+                      >
+                        {btn === "backspace" ? "⌫" : btn === "clear" ? "Clear" : btn}
+                      </Button>
+                    ))}
+                  </div>
+                  
+                  {/* Submit button */}
+                  <div className="mt-6 flex justify-center">
+                    <Button
+                      size="lg"
+                      onClick={handleSubmitAnswer}
+                      className={`${themeStyles.buttonColor} text-white px-8 py-3 rounded-full text-lg shadow-lg transition-all duration-300 hover:scale-105 hover:shadow-xl border border-indigo-400/30`}
+                      disabled={!userAnswer.trim() || isLoading}
+                    >
+                      Check Answer <ArrowRightIcon className="ml-2 h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </motion.div>
+
+        {/* Audio Controls */}
+        {currentOutput?.audio_url && (
+          <div className="w-full max-w-md my-4">
+            <AudioControls
+              isPlaying={isAudioPlaying}
+              onPlay={() => setIsAudioPlaying(true)}
+              audioText={currentOutput.text || "Learning with your math tutor"}
+            />
+          </div>
+        )}
       </div>
     </main>
   )
