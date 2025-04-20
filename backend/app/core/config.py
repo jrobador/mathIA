@@ -8,6 +8,7 @@ load_dotenv()
 class Settings(BaseSettings):
     # Core
     API_HOST: str = os.getenv("API_HOST", "azure") # Default to azure
+    BASE_URL: str = os.getenv("BASE_URL", "http://localhost:8000") # For generating static file URLs
 
     # Azure OpenAI
     AZURE_OPENAI_ENDPOINT: str | None = os.getenv("AZURE_OPENAI_ENDPOINT")
@@ -40,4 +41,3 @@ if settings.API_HOST == "azure":
     # Add check for key or tenant ID depending on your auth method
     if not settings.AZURE_OPENAI_API_KEY and not settings.AZURE_TENANT_ID:
          print("Warning: Neither AZURE_OPENAI_API_KEY nor AZURE_TENANT_ID is set for Azure OpenAI AAD auth.")
-         # Consider raising ValueError if key/AAD is strictly required

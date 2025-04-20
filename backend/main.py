@@ -1,12 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.api.endpoints import session
 from app.core.config import settings # Load settings early
 import uvicorn
-from fastapi.staticfiles import StaticFiles
 import os
 
-# Create directories if they don't exist
+# Create directories for static files if they don't exist
 os.makedirs("static/images", exist_ok=True)
 os.makedirs("static/audio", exist_ok=True)
 
@@ -18,12 +18,8 @@ app = FastAPI(
 
 # CORS Middleware
 origins = [
-    "http://localhost:3000",  # Allow your React frontend
-    # Add production frontend URL if needed
+    "http://localhost:3000", 
 ]
-
-# Mount static files directory
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,6 +28,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount static files directory for serving generated content
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Include API routers
 app.include_router(session.router, prefix="/session", tags=["Session"])
@@ -47,9 +46,9 @@ if __name__ == "__main__":
     if settings.API_HOST == 'azure':
         print(f"Using Azure OpenAI Endpoint: {settings.AZURE_OPENAI_ENDPOINT}")
         print(f"Using Deployment: {settings.AZURE_OPENAI_CHAT_DEPLOYMENT}")
-    # Add similar prints for other services if configured
-
-    # Run with uvicorn
-    # Use command line: uvicorn main:app --reload --port 8000
-    # Or programmatically (less common for development with reload):
+    
+    # Static file paths
+    print(f"Serving static files from: {os.path.abspath('static')}")
+    
+    
     uvicorn.run(app, host="0.0.0.0", port=8000)
