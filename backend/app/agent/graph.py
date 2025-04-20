@@ -78,6 +78,11 @@ def build_math_tutor_graph() -> StateGraph:
         }
     )
 
+    # Add edges from practice nodes to evaluate_answer
+    # These nodes set "next" to "evaluate_answer" in their implementations
+    graph.add_edge("present_guided_practice", "evaluate_answer")
+    graph.add_edge("present_independent_practice", "evaluate_answer")
+
     # Conditional edges for 'check_advance_topic' node
     # This node can either loop back to the decision node or end the graph.
     graph.add_conditional_edges(
@@ -96,17 +101,6 @@ def build_math_tutor_graph() -> StateGraph:
     
     # The evaluate_answer node should also return to determine_next_step after processing
     graph.add_edge("evaluate_answer", "determine_next_step")
-
-    # Nodes requiring user input ('present_guided_practice', 'present_independent_practice')
-    # do not have automatic outgoing edges defined here. 
-    # The typical pattern is:
-    # 1. These nodes execute and prepare output for the user (prompt_for_answer=True).
-    # 2. The graph execution pauses (implicitly returns control to the caller/API).
-    # 3. The API sends the output to the frontend and waits for the user's response.
-    # 4. When the user responds, the API adds the response to the state's message history 
-    #    and re-invokes the graph, usually starting from the 'evaluate_answer' node 
-    #    (or potentially back to 'determine_next_step' which then routes to evaluation).
-    # This external loop (API interaction) handles the pause for user input.
 
     print("Graph built successfully.")
     return graph

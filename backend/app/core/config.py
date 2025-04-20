@@ -15,13 +15,12 @@ class Settings(BaseSettings):
     AZURE_OPENAI_API_KEY: str | None = os.getenv("AZURE_OPENAI_API_KEY")
     AZURE_OPENAI_CHAT_DEPLOYMENT: str | None = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT")
     AZURE_OPENAI_API_VERSION: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
-    AZURE_TENANT_ID: str | None = os.getenv("AZURE_TENANT_ID") # For AAD
 
     # Image generation
-    AZURE_DALLE_ENDPOINT = os.getenv("AZURE_DALLE_ENDPOINT")
-    AZURE_DALLE_API_KEY = os.getenv("AZURE_DALLE_API_KEY")
+    AZURE_DALLE_ENDPOINT: str = os.getenv("AZURE_DALLE_ENDPOINT")
+    AZURE_DALLE_API_KEY: str = os.getenv("AZURE_DALLE_API_KEY")
 
-    # Azure Speech (Optional)
+    # Azure Speech
     AZURE_SPEECH_SUSCRIPTION_KEY: str | None = os.getenv("AZURE_SPEECH_SUSCRIPTION_KEY")
     AZURE_SPEECH_REGION: str | None = os.getenv("AZURE_SPEECH_REGION")
 
@@ -38,5 +37,5 @@ if settings.API_HOST == "azure":
     if not settings.AZURE_OPENAI_ENDPOINT or not settings.AZURE_OPENAI_CHAT_DEPLOYMENT:
         raise ValueError("AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_CHAT_DEPLOYMENT must be set when API_HOST is 'azure'")
     # Add check for key or tenant ID depending on your auth method
-    if not settings.AZURE_OPENAI_API_KEY and not settings.AZURE_TENANT_ID:
-         print("Warning: Neither AZURE_OPENAI_API_KEY nor AZURE_TENANT_ID is set for Azure OpenAI AAD auth.")
+    if not settings.AZURE_OPENAI_API_KEY:
+         print("Warning: AZURE_OPENAI_API_KEY is set for Azure OpenAI AAD auth.")
