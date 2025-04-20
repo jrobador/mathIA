@@ -3,6 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.endpoints import session
 from app.core.config import settings # Load settings early
 import uvicorn
+from fastapi.staticfiles import StaticFiles
+import os
+
+# Create directories if they don't exist
+os.makedirs("static/images", exist_ok=True)
+os.makedirs("static/audio", exist_ok=True)
 
 app = FastAPI(
     title="Math Tutor Agent API",
@@ -15,6 +21,9 @@ origins = [
     "http://localhost:3000",  # Allow your React frontend
     # Add production frontend URL if needed
 ]
+
+# Mount static files directory
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.add_middleware(
     CORSMiddleware,
