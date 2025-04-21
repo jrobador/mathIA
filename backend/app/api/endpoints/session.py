@@ -355,12 +355,6 @@ async def process_input(
 async def get_session_status(session_id: str):
     """
     Retrieves the current status of an active session, including content generation progress.
-    
-    Args:
-        session_id: The ID of the session.
-        
-    Returns:
-        SessionStatusResponse: Information about the session's current state.
     """
     # Check if the session exists
     if session_id not in active_sessions:
@@ -384,89 +378,60 @@ async def get_session_status(session_id: str):
     # Debug log the content ready flag
     print(f"Status check for session {session_id}: content_ready={content_ready}")
     
+    # Debug log the state structure
+    print(f"DEBUG: State keys: {list(current_state.keys())}")
+    print(f"DEBUG: current_step_output in state: {current_state.get('current_step_output')}")
+    
     # Get any error message
     error = session_data.get("error")
     
-    # Get the current output
+    # Get the current output - IMPROVED LOGIC
     agent_output = None
     
-    # Try to create agent_output from the current_step_output
-    if "current_step_output" in current_state:
-        output_data = current_state.get("current_step_output", {})
-        print(f"DEBUG: current_step_output found in state: {output_data}")
-        
-        # Only try to create AgentOutput if there's actual data
-        if output_data:
-            try:
-                # Create AgentOutput object from the output data
-                agent_output = AgentOutput(**output_data)
-                print(f"DEBUG: Successfully created AgentOutput")
-            except Exception as e:
-                print(f"ERROR: Failed to create AgentOutput: {str(e)}")
-                print(f"ERROR: output_data: {output_data}")
-    else:
-        print(f"DEBUG: No current_step_output found in state")
-    
-    # BUGFIX: If content is ready but agent_output is empty, create a fallback
-    if content_ready and not agent_output:
-        print("BUGFIX: Content is ready but agent_output is missing, creating fallback")
-        
+    # Approach 1: First check if current_step_output exists in the state returned by the graph
+    if "current_step_output" in current_state and current_state["current_step_output"]:
+        print(f"DEBUG: Found current_step_output in state: {current_state['current_step_output']}")
         try:
-            # Set default fallback text
-            fallback_text = "Your math practice is ready."
-            
-            # Try to get problem text from last_problem_details if it exists
-            last_problem_details = current_state.get("last_problem_details")
-            
-            if last_problem_details and isinstance(last_problem_details, dict):
-                problem = last_problem_details.get("problem")
-                if problem:
-                    fallback_text = problem
-                    print(f"Using problem text from last_problem_details")
-            
-            # Build a minimal agent_output with the fallback text
-            agent_output_dict = {
-                "text": fallback_text,
-                "prompt_for_answer": True
-            }
-            
-            # Try to add image and audio URLs if they exist in last_problem_details
-            if last_problem_details and isinstance(last_problem_details, dict):
+            agent_output = AgentOutput(**current_state["current_step_output"])
+        except Exception as e:
+            print(f"ERROR: Failed to create AgentOutput from current_step_output: {str(e)}")
+    
+    # Approach 2: If content is ready but agent_output is missing, try to build from last_problem_details
+    if content_ready and not agent_output:
+        last_problem_details = current_state.get("last_problem_details", {})
+        if last_problem_details:
+            print(f"DEBUG: Building agent_output from last_problem_details: {last_problem_details}")
+            try:
+                # Build output from problem details
+                agent_output_dict = {
+                    "text": last_problem_details.get("problem", "Your math practice is ready."),
+                    "prompt_for_answer": True
+                }
+                
+                # Add image and audio URLs from last_problem_details
                 if "image_url" in last_problem_details:
                     agent_output_dict["image_url"] = last_problem_details["image_url"]
                 
                 if "audio_url" in last_problem_details:
                     agent_output_dict["audio_url"] = last_problem_details["audio_url"]
-            
-            # Create the AgentOutput object from the dictionary
-            agent_output = AgentOutput(**agent_output_dict)
-            print(f"Created fallback agent_output with text: {fallback_text}")
-            
-            # Save this to current_step_output to fix the underlying issue
-            current_state["current_step_output"] = agent_output_dict
-            
-            # Update the state in the session data
-            active_sessions[session_id]["state"] = current_state
-            
-        except Exception as e:
-            print(f"ERROR creating fallback agent_output: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            
-            # Ultimate fallback - create a super simple agent_output
-            try:
-                agent_output = AgentOutput(
-                    text="Your math lesson is ready. Please proceed.",
-                    prompt_for_answer=True
-                )
-                current_state["current_step_output"] = {
-                    "text": "Your math lesson is ready. Please proceed.",
-                    "prompt_for_answer": True
-                }
+                
+                agent_output = AgentOutput(**agent_output_dict)
+                
+                # Fix the state by updating current_step_output
+                current_state["current_step_output"] = agent_output_dict
                 active_sessions[session_id]["state"] = current_state
-                print("Created ultimate fallback agent_output")
-            except Exception as e2:
-                print(f"ERROR creating ultimate fallback: {str(e2)}")
+                
+                print(f"DEBUG: Created agent_output from last_problem_details")
+            except Exception as e:
+                print(f"ERROR: Failed to create AgentOutput from last_problem_details: {str(e)}")
+    
+    # If still no output but content is ready, create a minimal fallback
+    if content_ready and not agent_output:
+        print(f"DEBUG: Creating minimal fallback agent_output")
+        agent_output = AgentOutput(
+            text="Your math practice is ready.", 
+            prompt_for_answer=True
+        )
     
     # Construct and return the status response
     response = SessionStatusResponse(

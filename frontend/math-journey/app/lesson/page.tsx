@@ -10,7 +10,10 @@ import { ArrowRightIcon } from "@radix-ui/react-icons"
 import { useTutor } from "@/contexts/TutorProvider"
 import { EvaluationResult } from "@/types/api"
 import AudioControls from "@/components/audio-controls"
-import ReactMarkdown from 'react-markdown' // Import markdown renderer
+import AudioPlayer from "@/components/audio-player" // Import the actual audio player
+import { Volume2 } from "lucide-react"
+import ReactMarkdown from 'react-markdown'
+import Image from "next/image" // Use Next.js Image for better image handling
 
 export default function LessonPage() {
   const router = useRouter()
@@ -32,10 +35,32 @@ export default function LessonPage() {
   const [userAnswer, setUserAnswer] = useState("")
   const [isAudioPlaying, setIsAudioPlaying] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [audioKey, setAudioKey] = useState(Date.now()) // Force audio component re-render
+  const [imageKey, setImageKey] = useState(Date.now()) // Force image component re-render
+
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const imageRef = useRef<HTMLDivElement | null>(null);
   
   // BUGFIX: Add tracking refs to prevent duplicate session starts
   const sessionStartAttemptedRef = useRef(false)
   const userInfoLoadedRef = useRef(false)
+
+  // Add debug logs for content
+  useEffect(() => {
+    if (currentOutput) {
+      console.log("Content details:", {
+        text: currentOutput.text?.substring(0, 50) + "...",
+        hasImage: !!currentOutput.image_url,
+        imageUrl: currentOutput.image_url,
+        hasAudio: !!currentOutput.audio_url,
+        audioUrl: currentOutput.audio_url,
+      });
+      
+      // Reset keys to force component remounting when URLs change
+      if (currentOutput.audio_url) setAudioKey(Date.now());
+      if (currentOutput.image_url) setImageKey(Date.now());
+    }
+  }, [currentOutput]);
 
   // Get user info from localStorage
   useEffect(() => {
@@ -105,7 +130,7 @@ export default function LessonPage() {
   // Handle submitting an answer
   const handleSubmitAnswer = async () => {
     if (!userAnswer.trim()) return
-
+    
     setIsLoading(true)
     
     try {
@@ -135,6 +160,13 @@ export default function LessonPage() {
       }
     }
   }
+
+  // Manual audio play function for debugging
+  const playAudioManually = () => {
+    if (audioRef.current) {
+      audioRef.current.play().catch(err => console.error("Error playing audio:", err));
+    }
+  };
 
   // Progress calculation (0-100)
   const progress = Math.round((masteryLevel || 0) * 100)
@@ -178,18 +210,6 @@ export default function LessonPage() {
   }
 
   const themeStyles = getThemeStyles()
-
-  // BUGFIX: Function to clean markdown formatting if we don't want to render it
-  const cleanMarkdown = (text?: string) => {
-    if (!text) return "";
-    // Remove markdown headers (# Text)
-    return text
-      .replace(/^\*\*(.*?)\*\*$/gm, '$1') // Remove bold markers
-      .replace(/^\#\#\#\s+(.*)$/gm, '$1') // Remove h3
-      .replace(/^\#\#\s+(.*)$/gm, '$1')   // Remove h2
-      .replace(/^\#\s+(.*)$/gm, '$1')     // Remove h1
-      .replace(/\*\*(.*?)\*\*/g, '$1');   // Remove any remaining bold markers
-  }
 
   return (
     <main className={`min-h-screen flex flex-col items-center justify-center bg-gradient-to-b ${themeStyles.bgGradient} p-4 relative overflow-hidden`}>
@@ -259,16 +279,39 @@ export default function LessonPage() {
                   </ReactMarkdown>
                 </div>
                 
-                {/* Visual element (if provided by backend) */}
+                {/* Visual element (if provided by backend) - IMPROVED VERSION */}
                 {currentOutput?.image_url && (
                   <div className="mb-6 flex justify-center">
                     <div className="relative h-[200px] w-full max-w-md rounded-lg overflow-hidden border border-gray-200">
-                      <img 
-                        src={currentOutput.image_url} 
-                        alt="Math visual"
-                        className="w-full h-full object-contain" 
-                      />
+                      {/* Use the imageKey to force remounting when URL changes */}
+                      <div key={imageKey} className="w-full h-full relative" ref={imageRef}>
+                        <img 
+                          src={currentOutput.image_url} 
+                          alt="Math visual"
+                          className="w-full h-full object-contain" 
+                          onError={(e) => console.error("Image failed to load:", e)}
+                        />
+                      </div>
                     </div>
+                  </div>
+                )}
+                
+                {/* Direct audio element for debugging */}
+                {currentOutput?.audio_url && (
+                  <div className="mb-4">
+                    <audio 
+                      ref={audioRef}
+                      controls
+                      src={currentOutput.audio_url}
+                      className="w-full"
+                      onError={(e) => console.error("Audio failed to load:", e)}
+                    />
+                    <button 
+                      onClick={playAudioManually}
+                      className="mt-2 px-3 py-1 bg-blue-100 text-blue-700 rounded text-sm"
+                    >
+                      Play Audio Manually
+                    </button>
                   </div>
                 )}
               </div>
@@ -317,16 +360,23 @@ export default function LessonPage() {
           )}
         </motion.div>
 
-        {/* Audio Controls */}
+        {/* Audio Player - REPLACED WITH SIMPLER AUDIO ELEMENT ABOVE */}
+        {/* Keeping the old code here for reference
         {currentOutput?.audio_url && (
           <div className="w-full max-w-md my-4">
-            <AudioControls
-              isPlaying={isAudioPlaying}
-              onPlay={() => setIsAudioPlaying(true)}
-              audioText={currentOutput.text || "Learning with your math tutor"}
+            <div className="mb-2 flex items-center gap-2">
+              <Volume2 className="h-4 w-4 text-indigo-600" />
+              <span className="text-sm text-indigo-700">Audio explanation</span>
+            </div>
+            <AudioPlayer
+              key={audioKey}
+              audioUrl={currentOutput.audio_url}
+              autoPlay={false}
+              onPlaybackComplete={() => setIsAudioPlaying(false)}
             />
           </div>
         )}
+        */}
       </div>
     </main>
   )

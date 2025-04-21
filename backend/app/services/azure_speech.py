@@ -29,7 +29,7 @@ logger.addHandler(file_handler)
 AUDIO_DIR = "static/audio"
 AUDIO_FORMAT = "audio-16khz-128kbitrate-mono-mp3"
 VOICE_NAME = "en-US-Emma2:DragonHDLatestNeural"
-STRING_TO_REMOVE = "**Problem Statement:***" # Define the string to remove
+STRING_TO_REMOVE = "**Problem Statement:**" # Define the string to remove
 
 # Ensure the audio directory exists
 os.makedirs(AUDIO_DIR, exist_ok=True)

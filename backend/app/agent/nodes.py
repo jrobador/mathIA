@@ -289,7 +289,9 @@ async def present_independent_practice(state: StudentSessionState) -> Dict[str, 
     state["last_problem_details"] = {
         "problem": problem_text,
         "solution": solution_text,
-        "type": "independent_practice"
+        "type": "independent_practice",
+        "image_url": image_url,  # BUGFIX: Save image_url in last_problem_details
+        "audio_url": audio_url   # BUGFIX: Save audio_url in last_problem_details
     }
     
     # Update the state
@@ -309,9 +311,12 @@ async def present_independent_practice(state: StudentSessionState) -> Dict[str, 
     # Update the state with the output
     state["current_step_output"] = current_step_output
     
-    # BUGFIX: Use 'wait_for_input' as the next step to break the loop
-    # This will be a special node that doesn't trigger any action and waits for user input
-    return {"next": "wait_for_input"}
+    # CRITICAL BUGFIX: Store a complete copy of current_step_output directly in the session state
+    result = {"next": "wait_for_input"}
+    result["current_step_output"] = current_step_output.copy()  # Ensure we store a copy of the output
+    
+    # Return the result with both the next step and the output
+    return result
 
 async def wait_for_input(state: StudentSessionState) -> Dict[str, Any]:
     """
