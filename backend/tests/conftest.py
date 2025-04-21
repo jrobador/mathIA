@@ -1,7 +1,6 @@
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
-import asyncio
 
 # Import your FastAPI app
 from main import app

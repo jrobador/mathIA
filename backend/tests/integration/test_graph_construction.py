@@ -1,34 +1,4 @@
-import pytest
-import asyncio
-from unittest.mock import patch, MagicMock, AsyncMock
-import os
-import sys
-
-# Test file that doesn't depend on complex async execution
-
-@pytest.mark.asyncio  # Mark this test as async
-async def test_determine_next_step_node_function():
-    """Test the determine_next_step function directly - no async, no graph."""
-    # Create mock state
-    state = {
-        "current_topic": "fractions_introduction",
-        "topic_mastery": {"fractions_introduction": 0.1},
-        "consecutive_correct": 0,
-        "consecutive_incorrect": 0,
-        "last_action_type": None,
-        "theory_presented_for_topics": []
-    }
-    
-    # Mock out any async calls inside determine_next_step
-    with patch('app.agent.nodes.determine_next_step', new_callable=AsyncMock) as mock_function:
-        mock_function.return_value = {"next": "present_theory"}
-        
-        # Call the function directly WITH await
-        result = await mock_function(state)
-        
-        # Check basic result - this should work even if graph is broken
-        assert "next" in result
-        assert result["next"] == "present_theory"
+from unittest.mock import patch, MagicMock
 
 def test_graph_construction():
     """Test that the graph can be constructed without running it."""
@@ -72,6 +42,3 @@ def test_api_endpoint_without_execution():
         response = client.get("/")
         assert response.status_code == 200
         assert "message" in response.json()
-
-if __name__ == "__main__":
-    pytest.main(["-v"])
