@@ -303,6 +303,9 @@ async def present_independent_practice(state: StudentSessionState) -> Dict[str, 
         "prompt_for_answer": True
     }
     
+    # BUGFIX: Add debug logging for current_step_output
+    print(f"Setting current_step_output to: {current_step_output}")
+    
     # Update the state with the output
     state["current_step_output"] = current_step_output
     

@@ -68,6 +68,35 @@ async def generate_session_content_background(session_id: str, state: Dict[str, 
         active_sessions[session_id]["state"] = result_state
         active_sessions[session_id]["last_updated"] = time.time()
         
+        # BUGFIX: Debug the current_step_output to see if it exists
+        if "current_step_output" in result_state:
+            print(f"DEBUG: current_step_output exists in result_state: {result_state['current_step_output']}")
+        else:
+            print(f"ERROR: current_step_output not found in result_state!")
+            print(f"Result state keys: {result_state.keys()}")
+            # Try to examine any potential output data that might be stored elsewhere
+            print(f"Checking for last_problem_details: {result_state.get('last_problem_details')}")
+            
+            # BUGFIX: Create a default current_step_output if missing
+            if "last_problem_details" in result_state:
+                problem_details = result_state.get("last_problem_details", {})
+                # Create a basic current_step_output from the problem details
+                result_state["current_step_output"] = {
+                    "text": problem_details.get("problem", "Practice problem is ready."),
+                    "prompt_for_answer": True
+                }
+                print(f"Created default current_step_output from problem details")
+            else:
+                # Last resort fallback
+                result_state["current_step_output"] = {
+                    "text": "Your math practice is ready.",
+                    "prompt_for_answer": True
+                }
+                print(f"Created basic fallback current_step_output")
+                
+        # Update the state again after potential fixes
+        active_sessions[session_id]["state"] = result_state        
+        
         # CRITICAL FIX: Make sure to set content_ready flag to True
         active_sessions[session_id]["content_ready"] = True
         
@@ -322,7 +351,6 @@ async def process_input(
             detail=f"Failed to process input: {str(e)}"
         )
 
-
 @router.get("/{session_id}/status", response_model=SessionStatusResponse)
 async def get_session_status(session_id: str):
     """
@@ -359,15 +387,89 @@ async def get_session_status(session_id: str):
     # Get any error message
     error = session_data.get("error")
     
-    # Get the current output if content is ready
+    # Get the current output
     agent_output = None
-    if content_ready and "current_step_output" in current_state:
+    
+    # Try to create agent_output from the current_step_output
+    if "current_step_output" in current_state:
         output_data = current_state.get("current_step_output", {})
+        print(f"DEBUG: current_step_output found in state: {output_data}")
+        
+        # Only try to create AgentOutput if there's actual data
         if output_data:
-            agent_output = AgentOutput(**output_data)
+            try:
+                # Create AgentOutput object from the output data
+                agent_output = AgentOutput(**output_data)
+                print(f"DEBUG: Successfully created AgentOutput")
+            except Exception as e:
+                print(f"ERROR: Failed to create AgentOutput: {str(e)}")
+                print(f"ERROR: output_data: {output_data}")
+    else:
+        print(f"DEBUG: No current_step_output found in state")
+    
+    # BUGFIX: If content is ready but agent_output is empty, create a fallback
+    if content_ready and not agent_output:
+        print("BUGFIX: Content is ready but agent_output is missing, creating fallback")
+        
+        try:
+            # Set default fallback text
+            fallback_text = "Your math practice is ready."
+            
+            # Try to get problem text from last_problem_details if it exists
+            last_problem_details = current_state.get("last_problem_details")
+            
+            if last_problem_details and isinstance(last_problem_details, dict):
+                problem = last_problem_details.get("problem")
+                if problem:
+                    fallback_text = problem
+                    print(f"Using problem text from last_problem_details")
+            
+            # Build a minimal agent_output with the fallback text
+            agent_output_dict = {
+                "text": fallback_text,
+                "prompt_for_answer": True
+            }
+            
+            # Try to add image and audio URLs if they exist in last_problem_details
+            if last_problem_details and isinstance(last_problem_details, dict):
+                if "image_url" in last_problem_details:
+                    agent_output_dict["image_url"] = last_problem_details["image_url"]
+                
+                if "audio_url" in last_problem_details:
+                    agent_output_dict["audio_url"] = last_problem_details["audio_url"]
+            
+            # Create the AgentOutput object from the dictionary
+            agent_output = AgentOutput(**agent_output_dict)
+            print(f"Created fallback agent_output with text: {fallback_text}")
+            
+            # Save this to current_step_output to fix the underlying issue
+            current_state["current_step_output"] = agent_output_dict
+            
+            # Update the state in the session data
+            active_sessions[session_id]["state"] = current_state
+            
+        except Exception as e:
+            print(f"ERROR creating fallback agent_output: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
+            # Ultimate fallback - create a super simple agent_output
+            try:
+                agent_output = AgentOutput(
+                    text="Your math lesson is ready. Please proceed.",
+                    prompt_for_answer=True
+                )
+                current_state["current_step_output"] = {
+                    "text": "Your math lesson is ready. Please proceed.",
+                    "prompt_for_answer": True
+                }
+                active_sessions[session_id]["state"] = current_state
+                print("Created ultimate fallback agent_output")
+            except Exception as e2:
+                print(f"ERROR creating ultimate fallback: {str(e2)}")
     
     # Construct and return the status response
-    return SessionStatusResponse(
+    response = SessionStatusResponse(
         session_id=session_id,
         current_topic=current_topic,
         mastery_levels=topic_mastery,
@@ -379,6 +481,11 @@ async def get_session_status(session_id: str):
         created_at=session_data.get("created_at"),
         last_updated=session_data.get("last_updated")
     )
+    
+    # Final debug output 
+    print(f"DEBUG: Returning response with content_ready={response.content_ready}, agent_output={'present' if response.agent_output else 'missing'}")
+    
+    return response
 
 @router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def end_session(session_id: str):

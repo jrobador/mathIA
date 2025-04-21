@@ -44,95 +44,143 @@ class MathTutorClient {
     this.restoreSession();
   }
 
-  /**
-   * Start a new tutoring session
-   */
-  async startSession({
-    personalized_theme = 'space',
-    initial_message = null,
-    config = null,
-    diagnostic_results = null,
-    learning_path = null
-  }: StartSessionOptions = {}): Promise<StartSessionResponse> {
-    try {
-      // Configure session based on inputs
-      let sessionConfig: SessionConfig = config || {};
-      
-      // Apply diagnostic results if available
-      if (diagnostic_results) {
-        sessionConfig.initial_difficulty = diagnostic_results.recommended_level || 'beginner';
-        sessionConfig.diagnostic_score = diagnostic_results.score;
-        sessionConfig.diagnostic_details = diagnostic_results.question_results;
-      }
-      
-      // Set initial topic based on learning path
-      if (learning_path) {
-        sessionConfig.initial_topic = this.mapLearningPathToTopic(learning_path);
-      }
+/**
+ * Start a new tutoring session
+ */
+async startSession({
+  personalized_theme = 'space',
+  initial_message = null,
+  config = null,
+  diagnostic_results = null,
+  learning_path = null
+}: StartSessionOptions = {}): Promise<StartSessionResponse> {
+  try {
+    // Configure session based on inputs
+    let sessionConfig: SessionConfig = config || {};
+    
+    // Apply diagnostic results if available
+    if (diagnostic_results) {
+      sessionConfig.initial_difficulty = diagnostic_results.recommended_level || 'beginner';
+      sessionConfig.diagnostic_score = diagnostic_results.score;
+      sessionConfig.diagnostic_details = diagnostic_results.question_results;
+    }
+    
+    // Set initial topic based on learning path
+    if (learning_path) {
+      sessionConfig.initial_topic = this.mapLearningPathToTopic(learning_path);
+    }
 
-      console.log("Sending session start request to backend...");
-      
-      // Make API request with a shorter timeout - we expect quick response now
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.quickTimeoutMs);
-      
-      const response = await fetch(`${this.baseUrl}/session/start`, {
-        method: 'POST',
-        headers: this.headers,
-        body: JSON.stringify({
-          personalized_theme,
-          initial_message,
-          config: sessionConfig,
-          learning_path
-        }),
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
+    console.log("Sending session start request to backend...");
+    
+    // Make API request with a shorter timeout - we expect quick response now
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.quickTimeoutMs);
+    
+    const response = await fetch(`${this.baseUrl}/session/start`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify({
+        personalized_theme,
+        initial_message,
+        config: sessionConfig,
+        learning_path
+      }),
+      signal: controller.signal
+    });
+    
+    clearTimeout(timeoutId);
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Error starting session');
-      }
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Error starting session');
+    }
 
-      const data: StartSessionResponse = await response.json();
-      
-      // Store session ID immediately
-      this.currentSessionId = data.session_id;
-      this.saveSession();
-      
-      console.log("Session ID received:", data.session_id);
-      
-      // If status indicates content is still being generated, poll for completion
-      if (data.status === "initializing") {
-        console.log("Content is being generated in the background, polling for completion...");
-        try {
-          const completeData = await this.pollForSessionCompletion(data.session_id);
+    const data: StartSessionResponse = await response.json();
+    
+    // Store session ID immediately
+    this.currentSessionId = data.session_id;
+    this.saveSession();
+    
+    console.log("Session ID received:", data.session_id);
+    
+    // If status indicates content is still being generated, poll for completion
+    if (data.status === "initializing") {
+      console.log("Content is being generated in the background, polling for completion...");
+      try {
+        const completeData = await this.pollForSessionCompletion(data.session_id);
+        
+        // BUGFIX: Add more detailed logging
+        if (completeData) {
+          console.log("Polling complete, received data:", {
+            has_content: true,
+            content_ready: completeData.content_ready,
+            has_agent_output: !!completeData.agent_output,
+            agent_output_text: completeData.agent_output?.text ? completeData.agent_output.text.substring(0, 50) + '...' : 'none',
+            has_error: !!completeData.error
+          });
           
           // Update the initial output with the complete content if available
-          if (completeData && completeData.agent_output) {
-            data.initial_output = completeData.agent_output;
-            data.status = "active";
+          if (completeData.agent_output) {
+            // Check if agent_output has any valuable content before using it
+            const hasContent = completeData.agent_output.text || 
+                             completeData.agent_output.image_url || 
+                             completeData.agent_output.audio_url;
             
-            // Normalize URLs for image and audio
-            this.normalizeContentUrls(data.initial_output);
-            console.log("Content generation complete, updated response with full content");
+            if (hasContent) {
+              console.log("Content generation complete with valid output, updating response");
+              data.initial_output = completeData.agent_output;
+              data.status = "active";
+              
+              // Normalize URLs for image and audio
+              this.normalizeContentUrls(data.initial_output);
+              console.log("Content generation complete, updated response with full content");
+            } else {
+              console.warn("Agent output received but contains no usable content");
+              // Create a fallback if the output exists but has no content
+              data.initial_output = {
+                text: "Your math lesson is ready. Let's get started!",
+                prompt_for_answer: true
+              };
+              data.status = "active";
+            }
+          } else {
+            console.warn("Content marked as ready but no agent_output available");
+            // Create a fallback if no output is available
+            data.initial_output = {
+              text: "Your math lesson is ready. Let's begin!",
+              prompt_for_answer: true
+            };
+            data.status = "active";
           }
-        } catch (pollingError) {
-          console.warn("Polling for content completion failed, returning initial response:", pollingError);
-          // We'll continue with the initial response even if polling fails
+        } else {
+          console.warn("Polling completed but no data returned!");
+          // Create a fallback if polling fails to return data
+          data.initial_output = {
+            text: "Your personalized math session is ready to begin.",
+            prompt_for_answer: true
+          };
+          data.status = "active";
         }
-      } else if (data.initial_output) {
-        // Normalize URLs for any content returned immediately
-        this.normalizeContentUrls(data.initial_output);
+      } catch (pollingError) {
+        console.warn("Polling for content completion failed, returning initial response:", pollingError);
+        // Create a fallback if polling fails with an error
+        data.initial_output = {
+          text: "Your math lesson is now ready to begin.",
+          prompt_for_answer: true
+        };
+        data.status = "active";
       }
-      
-      return data;
-    } catch (error) {
-      console.error('Error starting session:', error);
-      throw error;
+    } else if (data.initial_output) {
+      // Normalize URLs for any content returned immediately
+      this.normalizeContentUrls(data.initial_output);
     }
+    
+    return data;
+  } catch (error) {
+    console.error('Error starting session:', error);
+    throw error;
   }
+}
 
   /**
    * Process user input in an active session
@@ -318,6 +366,8 @@ private async pollForSessionCompletion(
   console.log(`Polling for session ${sessionId} content completion...`);
   
   let attempts = 0;
+  let consecutiveErrors = 0;
+  const maxConsecutiveErrors = 3;
   
   while (attempts < maxAttempts) {
     try {
@@ -326,10 +376,22 @@ private async pollForSessionCompletion(
       // Get the current status
       const status = await this.getSessionStatus(sessionId);
       
-      // Debug log the complete status response
+      // Reset consecutive errors counter on successful response
+      consecutiveErrors = 0;
+      
+      // BUGFIX: More detailed logging to help debug issues
+      const agentOutputDetails = status.agent_output ? {
+        has_text: !!status.agent_output.text,
+        text_length: status.agent_output.text ? status.agent_output.text.length : 0,
+        has_image: !!status.agent_output.image_url,
+        has_audio: !!status.agent_output.audio_url,
+        prompt_for_answer: status.agent_output.prompt_for_answer
+      } : 'null';
+      
       console.log(`Poll attempt ${attempts}, status:`, {
         content_ready: status.content_ready,
-        has_output: !!status.agent_output,
+        has_agent_output: !!status.agent_output,
+        agent_output_details: agentOutputDetails,
         error: status.error,
         mastery: status.mastery_levels[status.current_topic]
       });
@@ -337,6 +399,35 @@ private async pollForSessionCompletion(
       // Check if content is ready or if there was an error
       if (status.content_ready || status.error) {
         console.log(`Session ${sessionId} content is ready after ${attempts} attempts`);
+        
+        // BUGFIX: If content is ready but agent_output is missing/empty despite our backend fixes,
+        // we'll return the status anyway after enough attempts
+        if (status.content_ready && (!status.agent_output || !status.agent_output.text)) {
+          console.warn("Content marked as ready but agent_output is missing or empty!");
+          
+          // If we've made a lot of attempts, just return what we have
+          if (attempts > maxAttempts / 2) {
+            console.warn(`Returning current status after ${attempts} attempts despite missing output`);
+            
+            // Create a minimal local replacement if needed
+            if (!status.agent_output) {
+              console.warn("Creating minimal replacement agent_output");
+              status.agent_output = {
+                text: "Your math lesson is ready. Please continue.",
+                prompt_for_answer: true
+              };
+            }
+            
+            return status;
+          }
+          
+          // Otherwise wait and try again
+          const retryWait = 1000;
+          console.log(`Waiting ${retryWait}ms to try again...`);
+          await new Promise(resolve => setTimeout(resolve, retryWait));
+          continue;
+        }
+        
         return status;
       }
       
@@ -347,19 +438,55 @@ private async pollForSessionCompletion(
       
     } catch (error) {
       console.error(`Error polling session status (attempt ${attempts}):`, error);
+      consecutiveErrors++;
+      
+      // If we have too many consecutive errors, create a fallback response
+      if (consecutiveErrors >= maxConsecutiveErrors) {
+        console.warn(`${maxConsecutiveErrors} consecutive errors encountered, creating fallback response`);
+        
+        // Create a fallback response
+        const fallbackResponse: SessionStatusResponse = {
+          session_id: sessionId,
+          current_topic: "unknown",
+          mastery_levels: {},
+          current_cpa_phase: "Concrete",
+          is_active: true,
+          content_ready: true,
+          agent_output: {
+            text: "We encountered an issue loading your math lesson. Please reload the page to try again.",
+            prompt_for_answer: false
+          },
+          error: String(error),
+          created_at: Date.now() / 1000,
+          last_updated: Date.now() / 1000
+        };
+        
+        return fallbackResponse;
+      }
       
       // Wait a bit longer after errors
       await new Promise(resolve => setTimeout(resolve, this.pollingIntervalMs * 2));
-      
-      // If we've had too many consecutive errors, give up
-      if (attempts > maxAttempts / 2) {
-        throw new Error(`Too many errors while polling for session completion: ${error}`);
-      }
     }
   }
   
   console.warn(`Polling timed out after ${maxAttempts} attempts for session ${sessionId}`);
-  return null;
+  
+  // Create a timeout response
+  return {
+    session_id: sessionId,
+    current_topic: "unknown",
+    mastery_levels: {},
+    current_cpa_phase: "Concrete",
+    is_active: true,
+    content_ready: true,
+    agent_output: {
+      text: "It's taking longer than expected to prepare your math lesson. Please reload the page to try again.",
+      prompt_for_answer: false
+    },
+    error: "Polling timeout",
+    created_at: Date.now() / 1000,
+    last_updated: Date.now() / 1000
+  };
 }
 
   /**

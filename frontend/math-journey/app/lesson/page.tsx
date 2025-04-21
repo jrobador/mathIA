@@ -10,6 +10,7 @@ import { ArrowRightIcon } from "@radix-ui/react-icons"
 import { useTutor } from "@/contexts/TutorProvider"
 import { EvaluationResult } from "@/types/api"
 import AudioControls from "@/components/audio-controls"
+import ReactMarkdown from 'react-markdown' // Import markdown renderer
 
 export default function LessonPage() {
   const router = useRouter()
@@ -178,6 +179,18 @@ export default function LessonPage() {
 
   const themeStyles = getThemeStyles()
 
+  // BUGFIX: Function to clean markdown formatting if we don't want to render it
+  const cleanMarkdown = (text?: string) => {
+    if (!text) return "";
+    // Remove markdown headers (# Text)
+    return text
+      .replace(/^\*\*(.*?)\*\*$/gm, '$1') // Remove bold markers
+      .replace(/^\#\#\#\s+(.*)$/gm, '$1') // Remove h3
+      .replace(/^\#\#\s+(.*)$/gm, '$1')   // Remove h2
+      .replace(/^\#\s+(.*)$/gm, '$1')     // Remove h1
+      .replace(/\*\*(.*?)\*\*/g, '$1');   // Remove any remaining bold markers
+  }
+
   return (
     <main className={`min-h-screen flex flex-col items-center justify-center bg-gradient-to-b ${themeStyles.bgGradient} p-4 relative overflow-hidden`}>
       {/* Background image */}
@@ -229,18 +242,22 @@ export default function LessonPage() {
               } mb-3`}>
                 {currentOutput.evaluation === EvaluationResult.CORRECT ? "Great job!" : "Not quite right"}
               </h1>
-              <p className="text-base md:text-lg text-gray-800 mb-3">
-                {currentOutput.text}
-              </p>
+              <div className="text-base md:text-lg text-gray-800 mb-3">
+                {/* BUGFIX: Use markdown renderer or text cleaning */}
+                <ReactMarkdown>{currentOutput.text || ""}</ReactMarkdown>
+              </div>
             </div>
           ) : (
             // Standard content view - shows content and input when needed
             <div className="flex flex-col justify-between h-full">
               {/* Top part: Content from backend */}
               <div className="text-center">
-                <h1 className={`text-xl md:text-2xl font-bold ${themeStyles.primaryColor} mb-4`}>
-                  {currentOutput?.text || "Loading your math lesson..."}
-                </h1>
+                {/* BUGFIX: Use markdown renderer for text content */}
+                <div className={`text-xl md:text-2xl font-bold ${themeStyles.primaryColor} mb-4`}>
+                  <ReactMarkdown>
+                    {currentOutput?.text || "Loading your math lesson..."}
+                  </ReactMarkdown>
+                </div>
                 
                 {/* Visual element (if provided by backend) */}
                 {currentOutput?.image_url && (
