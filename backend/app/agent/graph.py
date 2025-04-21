@@ -82,7 +82,14 @@ def build_math_tutor_graph() -> StateGraph:
     )
 
     # Add edges from practice nodes to the determine_next_step node
-    graph.add_edge("present_guided_practice", "determine_next_step")
+    graph.add_conditional_edges(
+        "present_guided_practice",
+        route_based_on_next,
+        {
+            "evaluate_answer": "evaluate_answer",
+            "__default__": "determine_next_step"
+        }
+    )
     
     # BUGFIX: Add edge from wait_for_input to evaluate_answer
     # This is critical for the flow to continue after user input

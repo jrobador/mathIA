@@ -274,8 +274,8 @@ async def process_input(session_id: str, request: ProcessInputRequest = Body(...
         
         # CRITICAL FIX: Set appropriate next node based on current state
         last_action = current_state.get("last_action_type", "")
-        if last_action == "present_independent_practice":
-            # If we're answering a practice problem, route to evaluation
+        if last_action in ["present_independent_practice", "present_guided_practice"]:
+            # If we're answering any practice problem (guided or independent), route to evaluation
             current_state["next"] = "evaluate_answer"
             print(f"User provided answer for session {session_id}. Routing to evaluation...")
         else:
