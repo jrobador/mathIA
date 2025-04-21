@@ -57,7 +57,6 @@ def build_math_tutor_graph() -> StateGraph:
     graph.add_node("evaluate_answer", evaluate_answer)
     graph.add_node("provide_targeted_feedback", provide_targeted_feedback)
     graph.add_node("check_advance_topic", check_advance_topic)
-    # BUGFIX: Add wait_for_input node
     graph.add_node("wait_for_input", wait_for_input)
 
     # --- Define Edges (Transitions between nodes) ---
@@ -66,7 +65,6 @@ def build_math_tutor_graph() -> StateGraph:
     graph.set_entry_point("determine_next_step")
 
     # Conditional edges from the main decision node ('determine_next_step')
-    # The 'route_based_on_next' function will inspect the state and decide which node to go to next.
     graph.add_conditional_edges(
         "determine_next_step", # Source node
         route_based_on_next,   # Function to determine the route based on state['next']
@@ -78,7 +76,7 @@ def build_math_tutor_graph() -> StateGraph:
             "provide_targeted_feedback": "provide_targeted_feedback",
             "check_advance_topic": "check_advance_topic",
             "evaluate_answer": "evaluate_answer",
-            "wait_for_input": "wait_for_input",  # BUGFIX: Add edge to wait_for_input
+            "wait_for_input": "wait_for_input",
             END: END  # Direct mapping to the END constant for termination
         }
     )
@@ -86,10 +84,20 @@ def build_math_tutor_graph() -> StateGraph:
     # Add edges from practice nodes to the determine_next_step node
     graph.add_edge("present_guided_practice", "determine_next_step")
     
-    # BUGFIX: No edge from present_independent_practice - it now goes to wait_for_input
+    # BUGFIX: Add edge from wait_for_input to evaluate_answer
+    # This is critical for the flow to continue after user input
+    graph.add_conditional_edges(
+        "wait_for_input",  # Source node
+        route_based_on_next,  # Use the same routing function
+        {
+            "evaluate_answer": "evaluate_answer",
+            "determine_next_step": "determine_next_step",
+            # Default case if no specific next is set
+            "__default__": "evaluate_answer"
+        }
+    )
 
     # Conditional edges for 'check_advance_topic' node
-    # This node can either loop back to the decision node or end the graph.
     graph.add_conditional_edges(
         "check_advance_topic", # Source node
         route_based_on_next,   # Routing function
@@ -103,12 +111,8 @@ def build_math_tutor_graph() -> StateGraph:
     # Simple edges from nodes that always lead back to the main decision node
     graph.add_edge("present_theory", "determine_next_step")
     graph.add_edge("provide_targeted_feedback", "determine_next_step")
-    
-    # The evaluate_answer node should also return to determine_next_step after processing
     graph.add_edge("evaluate_answer", "determine_next_step")
     
-    # BUGFIX: wait_for_input has no outgoing edges, it's a terminal node for each session iteration
-
     print("Graph built successfully.")
     return graph
 

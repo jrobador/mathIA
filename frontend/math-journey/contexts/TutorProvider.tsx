@@ -21,6 +21,7 @@ interface TutorContextType {
   sessionId: string | null;
   currentOutput: AgentOutput | null;
   masteryLevel: number;
+  error?: { message: string };
   
   // Acciones
   startSession: (options: {

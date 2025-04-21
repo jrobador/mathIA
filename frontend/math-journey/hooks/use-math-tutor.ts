@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 interface UseMathTutorOptions {
   autoConnect?: boolean;
+  maxRetries?: number;
 }
 
 interface UseMathTutorReturn {
@@ -34,7 +35,7 @@ interface UseMathTutorReturn {
 }
 
 export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorReturn {
-  const { autoConnect = false } = options;
+  const { autoConnect = false, maxRetries = 2 } = options;
   
   // State
   const [client] = useState(() => new MathTutorClient());
@@ -45,10 +46,15 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
   const [masteryLevel, setMasteryLevel] = useState<number>(0);
   const [error, setError] = useState<Error | null>(null);
   
-  // BUGFIX: Add session request tracking refs
+  // Add recovery state to track if we're recovering from an error
+  const [isRecovering, setIsRecovering] = useState<boolean>(false);
+  
+  // BUGFIX: Add request tracking refs
   const sessionRequestPendingRef = useRef<boolean>(false);
   const sessionStartedRef = useRef<boolean>(false);
   const autoConnectPerformedRef = useRef<boolean>(false);
+  const messageRequestPendingRef = useRef<boolean>(false);
+  const retryCountRef = useRef<number>(0);
 
   // Start a tutoring session
   const startSession = useCallback(async (options: {
@@ -63,8 +69,8 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       return;
     }
     
-    // BUGFIX: Don't start a new session if one is already active
-    if (sessionId || sessionStartedRef.current) {
+    // BUGFIX: Don't start a new session if one is already active, unless we're in recovery mode
+    if ((sessionId || sessionStartedRef.current) && !isRecovering) {
       console.log("Session already active, ignoring new session request");
       return;
     }
@@ -81,7 +87,7 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
         ? client.formatDiagnosticResults(diagnostic_results)
         : null;
         
-      console.log("Starting new session...");
+      console.log(`Starting new session... ${isRecovering ? '(recovery mode)' : ''}`);
       
       // Call the API
       const response = await client.startSession({
@@ -96,6 +102,11 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       setAgentOutput(response.initial_output);
       sessionStartedRef.current = true;
       
+      // If we were in recovery mode, exit that mode
+      if (isRecovering) {
+        setIsRecovering(false);
+      }
+      
       console.log("Session started:", response.session_id);
     } catch (err) {
       const error = err as Error;
@@ -103,43 +114,157 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       console.error("Error starting session:", error);
       
       toast("Could not start the tutoring session");
+      
+      // Exit recovery mode on failure
+      if (isRecovering) {
+        setIsRecovering(false);
+      }
     } finally {
       setIsLoading(false);
       sessionRequestPendingRef.current = false;
     }
-  }, [client]);
+  }, [client, sessionId, isRecovering]);
 
-  // Send a message to the tutor
+  // Send a message to the tutor with improved error handling and recovery
   const sendMessage = useCallback(async (message: string) => {
     if (!sessionId) {
       console.warn("No active session");
+      toast("Session not available. Starting a new session...");
+      
+      // Try to restart the session
+      if (!isRecovering && !sessionRequestPendingRef.current) {
+        console.log("Attempting session recovery...");
+        setIsRecovering(true);
+        
+        // Get settings from localStorage for recovery
+        const theme = localStorage.getItem("learningTheme") || "space";
+        const learningPath = localStorage.getItem("learningPath") || "addition";
+        const studentName = localStorage.getItem("studentName") || "";
+        
+        try {
+          await startSession({
+            personalized_theme: theme,
+            learning_path: learningPath,
+            initial_message: `Hi, I'm ${studentName}. I want to learn ${learningPath}.`
+          });
+          
+          // Store the message to be sent after recovery
+          setLastMessage(message);
+        } catch (err) {
+          console.error("Recovery failed:", err);
+          setError(err as Error);
+          setIsRecovering(false);
+        }
+      }
+      
       return;
     }
     
+    messageRequestPendingRef.current = true;
     setIsLoading(true);
     setError(null);
     setLastMessage(message);
     
     try {
-      const response = await client.processInput(message);
+      retryCountRef.current = 0;
       
-      setAgentOutput(response.agent_output);
+      // BUGFIX: Add critical recovery capability
+      let currentSessionId = sessionId;
       
-      if (response.mastery_level !== undefined) {
-        setMasteryLevel(response.mastery_level);
-      }
+      const retryMessage = async (): Promise<void> => {
+        try {
+          console.log(`Sending message using session: ${currentSessionId}`);
+          const response = await client.processInput(message, currentSessionId);
+          
+          setAgentOutput(response.agent_output);
+          
+          if (response.mastery_level !== undefined) {
+            setMasteryLevel(response.mastery_level);
+          }
+          
+          // Reset retry counter on success
+          retryCountRef.current = 0;
+          console.log("Response received:", response);
+          
+        } catch (err: any) {
+          retryCountRef.current++;
+          
+          // Check if this is a "Session not found" error
+          const isSessionNotFound = err.message && err.message.includes("not found");
+          
+          // If session is missing but we have less than max retries, try auto-recovery
+          if (isSessionNotFound && retryCountRef.current <= maxRetries) {
+            console.warn(`Session ${currentSessionId} not found, attempting to create new session...`);
+            
+            // Clear the local session ID 
+            setSessionId(null);
+            
+            // Try to create a new session
+            try {
+              const theme = localStorage.getItem("learningTheme") || "space";
+              const learningPath = localStorage.getItem("learningPath") || "addition";
+              const studentName = localStorage.getItem("studentName") || "";
+              
+              const sessionResponse = await client.startSession({
+                personalized_theme: theme,
+                learning_path: learningPath,
+                initial_message: `Hi, I'm ${studentName}. I want to learn ${learningPath}.`
+              });
+              
+              // Update the session ID for the retry
+              currentSessionId = sessionResponse.session_id;
+              setSessionId(currentSessionId);
+              
+              console.log(`Created new session: ${currentSessionId}, retrying message...`);
+              
+              // Wait briefly for session setup before retry
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              
+              // Use the new session to send the message (will be handled by next retry)
+              throw new Error("Forcing retry with new session");
+            } catch (sessionErr) {
+              console.error("Failed to create recovery session:", sessionErr);
+              throw err; // Re-throw the original error
+            }
+          }
+          
+          // For other errors or if we've reached max retries
+          if (retryCountRef.current <= maxRetries) {
+            console.warn(`Message error (attempt ${retryCountRef.current}/${maxRetries}), retrying...`);
+            toast(`Retrying... (${retryCountRef.current}/${maxRetries})`, {
+              duration: 1500
+            });
+            
+            // Wait before retrying
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            return retryMessage();
+          }
+          
+          // If we've reached max retries and still failing, throw the error
+          throw err;
+        }
+      };
       
-      console.log("Response received", response);
+      // Start the retry chain
+      await retryMessage();
+      
     } catch (err) {
       const error = err as Error;
       setError(error);
       console.error("Error processing message:", error);
       
-      toast("Could not process your message");
+      toast(error.message || "Could not process your message");
+      
+      // Check for specific errors that indicate the session is gone
+      if (error.message.includes("not found") || error.message.includes("No active session")) {
+        console.warn("Session no longer exists, clearing local session state");
+        setSessionId(null);
+      }
     } finally {
       setIsLoading(false);
+      messageRequestPendingRef.current = false;
     }
-  }, [client, sessionId]);
+  }, [client, sessionId, isRecovering, maxRetries, startSession]);
 
   // End the current tutoring session
   const endSession = useCallback(async () => {
@@ -169,6 +294,7 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
     setLastMessage(null);
     setMasteryLevel(0);
     setError(null);
+    setIsRecovering(false);
   }, []);
 
   // Auto-connect logic
@@ -201,6 +327,19 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       }
     };
   }, [autoConnect, client, sessionId, isLoading, startSession]);
+  
+  // Process pending message after recovery
+  useEffect(() => {
+    if (sessionId && lastMessage && !isLoading && isRecovering) {
+      // Small delay to ensure session is fully established
+      const timer = setTimeout(() => {
+        console.log("Resubmitting pending message after recovery");
+        sendMessage(lastMessage).catch(console.error);
+      }, 1000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [sessionId, lastMessage, isLoading, isRecovering, sendMessage]);
 
   return {
     client,

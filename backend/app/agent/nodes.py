@@ -318,18 +318,24 @@ async def present_independent_practice(state: StudentSessionState) -> Dict[str, 
     # Return the result with both the next step and the output
     return result
 
+# In backend/app/agent/nodes.py
 async def wait_for_input(state: StudentSessionState) -> Dict[str, Any]:
     """
     A placeholder node that signals the graph to pause execution and wait for user input.
-    This node doesn't perform any action except preventing the graph from continuing to execute.
     
     Returns:
-        A dict with no 'next' key, to signal that the graph should stop execution.
+        A dict with no 'next' key to signal graph pausing, or with 'next' set to 'evaluate_answer'
+        if user input has been received.
     """
-    print("Waiting for user input...")
+    print("Executing wait_for_input node...")
     
-    # Do not specify a 'next' key, which will cause the graph to pause execution
-    # Deliberately return an empty dict or one without a 'next' key
+    # Check if the next node has been explicitly set in the state by the API
+    if "next" in state and state["next"] == "evaluate_answer":
+        print("User input detected, proceeding to evaluate_answer")
+        return {"next": "evaluate_answer"}
+    
+    # Otherwise, pause the graph by returning empty dict
+    print("Waiting for user input. Pausing graph execution.")
     return {}
 
 async def evaluate_answer(state: StudentSessionState) -> Dict[str, Any]:
@@ -338,7 +344,17 @@ async def evaluate_answer(state: StudentSessionState) -> Dict[str, Any]:
     and determines the type of error, if any. Updates mastery and tracking stats.
     """
     print("Executing evaluate_answer...")
-    # Get the student's answer (assumed to be the last message in the history)
+    
+    # BUGFIX: Ensure we have the necessary state for evaluation
+    if "last_problem_details" not in state or not state.get("last_problem_details"):
+        print("Warning: No problem details found to evaluate. Returning to decision step.")
+        state["current_step_output"] = {
+            "text": "Let's continue with your math practice.",
+            "prompt_for_answer": False
+        }
+        return {"next": "determine_next_step"}
+        
+    # Get the student's answer (should be the last message)
     messages = state.get("messages", [])
     
     # Check if the last message is from the human (student)

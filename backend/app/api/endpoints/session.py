@@ -260,97 +260,86 @@ async def start_session(request: StartSessionRequest = Body(...), background_tas
         )
             
 @router.post("/{session_id}/process", response_model=ProcessInputResponse)
-async def process_input(
-    session_id: str, 
-    request: ProcessInputRequest = Body(...),
-    response: Response = None # Inject Response object to set headers
-):
-    """
-    Processes user input for an active session.
-    
-    - Verifies that the session exists.
-    - Adds the user's message to the state's message history.
-    - Runs the graph with the updated state to get the next agent action/response.
-    
-    Args:
-        session_id: The ID of the active session.
-        request: Contains the user's message input.
-        response: FastAPI Response object for setting headers.
-        
-    Returns:
-        ProcessInputResponse: Contains the agent's output after processing the input.
-    """
-    # Verify that the session ID exists in our active sessions
-    if session_id not in active_sessions:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail="Session not found. Please start a new session."
-        )
-
+async def process_input(session_id: str, request: ProcessInputRequest = Body(...)):
     try:
-        # Retrieve the session data (which includes the state)
+        # Retrieve the session data
         session_data = active_sessions[session_id]
         current_state = session_data["state"]
         
-        # Add the user's new message to the message history in the state
+        # Add the user's new message to the message history
         if "messages" not in current_state:
-            current_state["messages"] = [] # Initialize if it doesn't exist
+            current_state["messages"] = []
         
-        # Append the new HumanMessage
         current_state["messages"].append(HumanMessage(content=request.message))
         
-        # BUGFIX: Always set evaluate_answer as the next step when receiving user input
-        # This ensures we properly evaluate their response to the practice problem
-        current_state["next"] = "evaluate_answer"
-        print(f"User provided answer for session {session_id}. Routing to evaluation...")
+        # CRITICAL FIX: Set appropriate next node based on current state
+        last_action = current_state.get("last_action_type", "")
+        if last_action == "present_independent_practice":
+            # If we're answering a practice problem, route to evaluation
+            current_state["next"] = "evaluate_answer"
+            print(f"User provided answer for session {session_id}. Routing to evaluation...")
+        else:
+            # For other types of input, just determine the next step
+            current_state["next"] = "determine_next_step"
         
-        # Execute the graph with the updated state (including the new user message)
-        start_time = time.time()
-        print(f"Processing input for session {session_id}. Current topic: {current_state.get('current_topic')}, Phase: {current_state.get('current_cpa_phase')}")
-        
-        # Invoke the compiled graph asynchronously
-        result_state = await compiled_app.ainvoke(current_state)
-        
-        # After processing, clear the next state to prevent automatic execution
-        if "next" in result_state:
-            del result_state["next"]
-        
-        # Update the session data with the new state returned by the graph
-        session_data["state"] = result_state
-        session_data["last_updated"] = time.time() # Update the timestamp
-        
-        # Prepare the response for the client
-        agent_output_data = result_state.get("current_step_output", {})
-        agent_output = AgentOutput(**agent_output_data)
-        
-        # Get the current mastery level for the response
-        current_topic = result_state.get("current_topic", "")
-        mastery_level = result_state.get("topic_mastery", {}).get(current_topic, 0.0)
-        
-        # Log performance
-        processing_time = time.time() - start_time
-        print(f"Processed input in {processing_time:.2f} seconds for session {session_id}")
-        
-        # Set a custom header for monitoring processing time (optional)
-        if response:
-            response.headers["X-Processing-Time"] = f"{processing_time:.2f}"
-        
-        return ProcessInputResponse(
-            session_id=session_id, 
-            agent_output=agent_output,
-            mastery_level=mastery_level # Include current mastery in response
-        )
-        
+        try:
+            # Use wait_for instead of timeout for Python compatibility
+            result_state = await asyncio.wait_for(
+                compiled_app.ainvoke(current_state), 
+                timeout=20.0
+            )
+            
+            # After processing, clear the next state marker
+            if "next" in result_state:
+                del result_state["next"]
+            
+            # Update the session state
+            session_data["state"] = result_state
+            session_data["last_updated"] = time.time()
+            
+            # Prepare the response
+            agent_output_data = result_state.get("current_step_output", {})
+            agent_output = AgentOutput(**agent_output_data)
+            
+            # Get the current mastery level
+            current_topic = result_state.get("current_topic", "")
+            mastery_level = result_state.get("topic_mastery", {}).get(current_topic, 0.0)
+            
+            # CRITICAL BUGFIX: Add debug output to help with troubleshooting
+            print(f"Processed input successfully for session {session_id}")
+            
+            return ProcessInputResponse(
+                session_id=session_id, 
+                agent_output=agent_output,
+                mastery_level=mastery_level
+            )
+            
+        except asyncio.TimeoutError:
+            print(f"WARNING: Processing timed out for session {session_id}")
+            # Return an error response but keep the session
+            error_output = {
+                "text": "I'm having trouble processing your answer. Please try again.",
+                "prompt_for_answer": True
+            }
+            return ProcessInputResponse(
+                session_id=session_id,
+                agent_output=AgentOutput(**error_output),
+                mastery_level=current_state.get("topic_mastery", {}).get(current_state.get("current_topic", ""), 0.0)
+            )
+    
     except Exception as e:
-        # Log errors and return a server error response
         print(f"Error processing input for session {session_id}: {str(e)}")
         import traceback
         traceback.print_exc()
+        
+        # Important: Don't end the session here! Just return an error
+        # DO NOT call endSession or terminate the session
+        
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail=f"Failed to process input: {str(e)}"
         )
-
+        
 @router.get("/{session_id}/status", response_model=SessionStatusResponse)
 async def get_session_status(session_id: str):
     """
@@ -455,11 +444,16 @@ async def get_session_status(session_id: str):
 @router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def end_session(session_id: str):
     """
-    Ends an active session and removes it from memory (or marks as inactive).
+    Ends an active session and removes it from memory.
     
     Args:
         session_id: The ID of the session to end.
     """
+    # BUGFIX: Add debug log to trace session deletions
+    print(f"Session deletion requested for {session_id}. Stack trace:")
+    import traceback
+    traceback.print_stack()
+    
     # Check if the session exists
     if session_id not in active_sessions:
         raise HTTPException(
@@ -467,10 +461,9 @@ async def end_session(session_id: str):
             detail="Session not found"
         )
     
-    # In a real system, we might archive session data for analysis before deleting
     print(f"Ending session {session_id}")
     
-    # Remove the session from the in-memory dictionary
+    # BUGFIX: This is the only place sessions should be removed
     try:
         del active_sessions[session_id]
     except KeyError:
