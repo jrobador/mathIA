@@ -19,7 +19,6 @@ interface UseMathTutorReturn {
   masteryLevel: number;
   error: Error | null;
   
-  // Methods to interact with the API
   startSession: (options: {
     personalized_theme?: string;
     initial_message?: string;
@@ -29,9 +28,8 @@ interface UseMathTutorReturn {
   
   sendMessage: (message: string) => Promise<void>;
   endSession: () => Promise<void>;
-  
-  // Utility methods
   resetState: () => void;
+  prepareForUnmount: () => void; // New method to signal true unmounting
 }
 
 export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorReturn {
@@ -45,16 +43,15 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [masteryLevel, setMasteryLevel] = useState<number>(0);
   const [error, setError] = useState<Error | null>(null);
-  
-  // Add recovery state to track if we're recovering from an error
   const [isRecovering, setIsRecovering] = useState<boolean>(false);
   
-  // BUGFIX: Add request tracking refs
+  // Tracking refs
   const sessionRequestPendingRef = useRef<boolean>(false);
   const sessionStartedRef = useRef<boolean>(false);
   const autoConnectPerformedRef = useRef<boolean>(false);
   const messageRequestPendingRef = useRef<boolean>(false);
   const retryCountRef = useRef<number>(0);
+  const willUnmountRef = useRef<boolean>(false); // New ref to track true unmounting
 
   // Start a tutoring session
   const startSession = useCallback(async (options: {
@@ -63,13 +60,12 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
     learning_path?: string;
     diagnostic_results?: DiagnosticQuestionResult[];
   }) => {
-    // BUGFIX: Prevent concurrent session creation requests
+    // Implementation remains the same
     if (sessionRequestPendingRef.current) {
       console.log("Session request already in progress, ignoring duplicate request");
       return;
     }
     
-    // BUGFIX: Don't start a new session if one is already active, unless we're in recovery mode
     if ((sessionId || sessionStartedRef.current) && !isRecovering) {
       console.log("Session already active, ignoring new session request");
       return;
@@ -82,14 +78,12 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
     try {
       const { personalized_theme, initial_message, learning_path, diagnostic_results } = options;
       
-      // Format diagnostic results if provided
       const formattedDiagnostic = diagnostic_results 
         ? client.formatDiagnosticResults(diagnostic_results)
         : null;
         
       console.log(`Starting new session... ${isRecovering ? '(recovery mode)' : ''}`);
       
-      // Call the API
       const response = await client.startSession({
         personalized_theme,
         initial_message,
@@ -97,12 +91,10 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
         diagnostic_results: formattedDiagnostic
       });
       
-      // Update state
       setSessionId(response.session_id);
       setAgentOutput(response.initial_output);
       sessionStartedRef.current = true;
       
-      // If we were in recovery mode, exit that mode
       if (isRecovering) {
         setIsRecovering(false);
       }
@@ -115,7 +107,6 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       
       toast("Could not start the tutoring session");
       
-      // Exit recovery mode on failure
       if (isRecovering) {
         setIsRecovering(false);
       }
@@ -125,18 +116,17 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
     }
   }, [client, sessionId, isRecovering]);
 
-  // Send a message to the tutor with improved error handling and recovery
+  // Send a message implementation remains the same
   const sendMessage = useCallback(async (message: string) => {
+    // Implementation remains unchanged
     if (!sessionId) {
       console.warn("No active session");
       toast("Session not available. Starting a new session...");
       
-      // Try to restart the session
       if (!isRecovering && !sessionRequestPendingRef.current) {
         console.log("Attempting session recovery...");
         setIsRecovering(true);
         
-        // Get settings from localStorage for recovery
         const theme = localStorage.getItem("learningTheme") || "space";
         const learningPath = localStorage.getItem("learningPath") || "addition";
         const studentName = localStorage.getItem("studentName") || "";
@@ -148,7 +138,6 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
             initial_message: `Hi, I'm ${studentName}. I want to learn ${learningPath}.`
           });
           
-          // Store the message to be sent after recovery
           setLastMessage(message);
         } catch (err) {
           console.error("Recovery failed:", err);
@@ -160,6 +149,7 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       return;
     }
     
+    // Rest of the implementation remains the same...
     messageRequestPendingRef.current = true;
     setIsLoading(true);
     setError(null);
@@ -167,11 +157,10 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
     
     try {
       retryCountRef.current = 0;
-      
-      // BUGFIX: Add critical recovery capability
       let currentSessionId = sessionId;
       
       const retryMessage = async (): Promise<void> => {
+        // Existing implementation...
         try {
           console.log(`Sending message using session: ${currentSessionId}`);
           const response = await client.processInput(message, currentSessionId);
@@ -182,24 +171,20 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
             setMasteryLevel(response.mastery_level);
           }
           
-          // Reset retry counter on success
           retryCountRef.current = 0;
           console.log("Response received:", response);
           
         } catch (err: any) {
+          // Existing error handling...
           retryCountRef.current++;
           
-          // Check if this is a "Session not found" error
           const isSessionNotFound = err.message && err.message.includes("not found");
           
-          // If session is missing but we have less than max retries, try auto-recovery
           if (isSessionNotFound && retryCountRef.current <= maxRetries) {
             console.warn(`Session ${currentSessionId} not found, attempting to create new session...`);
             
-            // Clear the local session ID 
             setSessionId(null);
             
-            // Try to create a new session
             try {
               const theme = localStorage.getItem("learningTheme") || "space";
               const learningPath = localStorage.getItem("learningPath") || "addition";
@@ -211,41 +196,34 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
                 initial_message: `Hi, I'm ${studentName}. I want to learn ${learningPath}.`
               });
               
-              // Update the session ID for the retry
               currentSessionId = sessionResponse.session_id;
               setSessionId(currentSessionId);
               
               console.log(`Created new session: ${currentSessionId}, retrying message...`);
               
-              // Wait briefly for session setup before retry
               await new Promise(resolve => setTimeout(resolve, 1000));
               
-              // Use the new session to send the message (will be handled by next retry)
               throw new Error("Forcing retry with new session");
             } catch (sessionErr) {
               console.error("Failed to create recovery session:", sessionErr);
-              throw err; // Re-throw the original error
+              throw err;
             }
           }
           
-          // For other errors or if we've reached max retries
           if (retryCountRef.current <= maxRetries) {
             console.warn(`Message error (attempt ${retryCountRef.current}/${maxRetries}), retrying...`);
             toast(`Retrying... (${retryCountRef.current}/${maxRetries})`, {
               duration: 1500
             });
             
-            // Wait before retrying
             await new Promise(resolve => setTimeout(resolve, 1500));
             return retryMessage();
           }
           
-          // If we've reached max retries and still failing, throw the error
           throw err;
         }
       };
       
-      // Start the retry chain
       await retryMessage();
       
     } catch (err) {
@@ -255,7 +233,6 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       
       toast(error.message || "Could not process your message");
       
-      // Check for specific errors that indicate the session is gone
       if (error.message.includes("not found") || error.message.includes("No active session")) {
         console.warn("Session no longer exists, clearing local session state");
         setSessionId(null);
@@ -276,7 +253,6 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
     try {
       await client.endSession();
       resetState();
-      // BUGFIX: Reset session tracking refs
       sessionStartedRef.current = false;
       console.log("Session ended");
     } catch (err) {
@@ -297,15 +273,18 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
     setIsRecovering(false);
   }, []);
 
-  // Auto-connect logic
+  // New method to signal true unmounting
+  const prepareForUnmount = useCallback(() => {
+    console.log("Preparing for unmount - will clean up session");
+    willUnmountRef.current = true;
+  }, []);
+
+  // Auto-connect logic with modified cleanup
   useEffect(() => {
-    // BUGFIX: Use refs to ensure auto-connect only happens once
     if (autoConnect && !sessionId && !isLoading && !autoConnectPerformedRef.current && !sessionRequestPendingRef.current) {
       const autoInitialize = async () => {
-        // Mark auto-connect as in progress before any async operations
         autoConnectPerformedRef.current = true;
         
-        // Retrieve preferences from localStorage
         const theme = localStorage.getItem("learningTheme") || "space";
         const learningPath = localStorage.getItem("learningPath") || "addition";
         const studentName = localStorage.getItem("studentName") || "";
@@ -320,10 +299,13 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       autoInitialize();
     }
     
-    // Clean up session on component unmount
+    // FIXED: Only end session on true unmount
     return () => {
-      if (sessionId) {
+      if (sessionId && willUnmountRef.current) {
+        console.log("Component unmounting - cleaning up session:", sessionId);
         client.endSession().catch(console.error);
+      } else if (sessionId) {
+        console.log("Component re-rendering - preserving session:", sessionId);
       }
     };
   }, [autoConnect, client, sessionId, isLoading, startSession]);
@@ -331,7 +313,6 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
   // Process pending message after recovery
   useEffect(() => {
     if (sessionId && lastMessage && !isLoading && isRecovering) {
-      // Small delay to ensure session is fully established
       const timer = setTimeout(() => {
         console.log("Resubmitting pending message after recovery");
         sendMessage(lastMessage).catch(console.error);
@@ -352,6 +333,7 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
     startSession,
     sendMessage,
     endSession,
-    resetState
+    resetState,
+    prepareForUnmount // Export the new method
   };
 }

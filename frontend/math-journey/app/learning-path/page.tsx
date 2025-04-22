@@ -1,3 +1,5 @@
+// math-journey/src/app/learning-path/page.tsx
+
 "use client"
 
 import { useState, useEffect } from "react"
