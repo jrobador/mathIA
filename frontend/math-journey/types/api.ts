@@ -3,6 +3,14 @@
  * Actualizados para soportar la nueva funcionalidad WebSocket
  */
 
+// Enumeración para resultados de evaluación
+export enum EvaluationResult {
+  CORRECT = "Correct",
+  INCORRECT_CONCEPTUAL = "Incorrect_Conceptual",
+  INCORRECT_CALCULATION = "Incorrect_Calculation",
+  UNCLEAR = "Unclear"
+}
+
 // Configuración del Cliente API
 export interface MathTutorClientConfig {
   baseUrl?: string;

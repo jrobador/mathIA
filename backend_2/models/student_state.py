@@ -74,13 +74,18 @@ class AgentOutput(BaseModel):
 def initialize_state(session_id: str, topic_id: str = "fractions_introduction", 
                     personalized_theme: str = "space", user_id: Optional[str] = None) -> StudentState:
     """Inicializa un nuevo estado de sesión con valores predeterminados."""
+    # Ensure we're using the enum instance, not just the string value
+    concrete_phase = CPAPhase.CONCRETE  # Get the enum instance
+    
     return StudentState(
         session_id=session_id,
         user_id=user_id,
         current_topic=topic_id,
-        current_cpa_phase=CPAPhase.CONCRETE,
-        topic_mastery={topic_id: 0.1},  # Dominio bajo inicial para el tema de inicio
+        current_cpa_phase=concrete_phase,  # Use the enum instance
+        topic_mastery={topic_id: 0.1},  # Dominio inicial bajo para el tema de inicio
         personalized_theme=personalized_theme,
+        created_at=datetime.now(),
+        updated_at=datetime.now()
     )
 
 def get_current_mastery(state: StudentState) -> float:

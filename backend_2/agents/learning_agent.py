@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional, List, Tuple
 import uuid
 import autogen
 from datetime import datetime
+import os
 
 from models.student_state import (
     StudentState, initialize_state,
@@ -18,6 +19,10 @@ from agents.functions import (
     simplify_instruction, check_advance_topic
 )
 from models.curriculum import get_roadmap, get_all_roadmaps_info
+from config import (
+    AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_OPENAI_CHAT_DEPLOYMENT,
+    AZURE_OPENAI_API_VERSION, OPENAI_AVAILABLE
+)
 
 class AdaptiveLearningAgent:
     """
@@ -32,19 +37,40 @@ class AdaptiveLearningAgent:
         self.sessions = {}  # Almacena las sesiones activas
         
         # Configurar el agente de AutoGen para generación de contenido
-        self.llm_config = {
-            "model": "gpt-4-turbo",
-            "temperature": 0.2,
-        }
+        # Solo crear el agente si OpenAI está disponible
+        self.content_agent = None
         
-        # Crear agente asistente para generación de contenido (si es necesario)
-        self.content_agent = autogen.AssistantAgent(
-            name="content_tutor",
-            llm_config=self.llm_config,
-            system_message="""Eres un tutor educativo experto que genera contenido adaptativo.
-            Tu objetivo es explicar conceptos de manera clara y proporcionar problemas de práctica apropiados.
-            Adapta tu respuesta según el nivel de dominio del estudiante y el tema."""
-        )
+        if OPENAI_AVAILABLE:
+            # Use Azure OpenAI configuration
+            self.llm_config = {
+                "config_list": [{
+                    "model": AZURE_OPENAI_CHAT_DEPLOYMENT,
+                    "api_key": AZURE_OPENAI_API_KEY,
+                    "api_base": AZURE_OPENAI_ENDPOINT,
+                    "api_type": "azure",
+                    "api_version": AZURE_OPENAI_API_VERSION,
+                }],
+                "temperature": 0.2,
+            }
+            
+            # Set OpenAI API key as environment variable as a fallback
+            os.environ["OPENAI_API_KEY"] = AZURE_OPENAI_API_KEY
+            
+            try:
+                # Create agent only if OpenAI is available
+                self.content_agent = autogen.AssistantAgent(
+                    name="content_tutor",
+                    llm_config=self.llm_config,
+                    system_message="""Eres un tutor educativo experto que genera contenido adaptativo.
+                    Tu objetivo es explicar conceptos de manera clara y proporcionar problemas de práctica apropiados.
+                    Adapta tu respuesta según el nivel de dominio del estudiante y el tema."""
+                )
+                print("AutoGen content agent initialized successfully")
+            except Exception as e:
+                print(f"Warning: Could not initialize AutoGen agent: {e}")
+                # Continue without AutoGen agent - will use alternative methods
+        else:
+            print("Azure OpenAI not available, AutoGen content agent will not be used")
         
         # Cargar información de roadmaps disponibles
         self.available_roadmaps = get_all_roadmaps_info()
@@ -126,30 +152,48 @@ class AdaptiveLearningAgent:
                 "state_metadata": self._get_state_metadata(state)
             }
         
-        # Determinar el próximo paso
-        next_step_result = await determine_next_step(state)
-        
-        # Ejecutar la acción determinada
-        action = next_step_result.get("action")
-        if action == "pause":
-            # Si debe pausar, devolver un resultado vacío
+        try:
+            # Determinar el próximo paso
+            next_step_result = await determine_next_step(state)
+            
+            # Ejecutar la acción determinada
+            action = next_step_result.get("action")
+            if action == "pause":
+                # Si debe pausar, devolver un resultado vacío
+                return {
+                    "action": "pause",
+                    "waiting_for_input": True,
+                    "state_metadata": self._get_state_metadata(state)
+                }
+            else:
+                # Ejecutar la acción correspondiente
+                result = await self._execute_action(action, state)
+                
+                # Añadir metadatos del estado actualizado
+                result["state_metadata"] = self._get_state_metadata(state)
+                
+                # Si la acción configura waiting_for_input, reflejarlo en la respuesta
+                if state.waiting_for_input:
+                    result["waiting_for_input"] = True
+                
+                # Si no está esperando input, determinar el siguiente paso (similar a LangGraph)
+                if not state.waiting_for_input:
+                    next_determination = await determine_next_step(state)
+                    result["next_action"] = next_determination.get("action")
+                
+                return result
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            
+            # Manejar errores de manera uniforme
+            state.last_action_type = "error"
             return {
-                "action": "pause",
-                "waiting_for_input": True,
+                "action": "error",
+                "error": str(e),
+                "fallback_text": f"Hubo un error procesando tu solicitud. Intentemos un enfoque diferente.",
                 "state_metadata": self._get_state_metadata(state)
             }
-        else:
-            # Ejecutar la acción correspondiente
-            result = await self._execute_action(action, state)
-            
-            # Añadir metadatos del estado actualizado
-            result["state_metadata"] = self._get_state_metadata(state)
-            
-            # Si la acción configura waiting_for_input, reflejarlo en la respuesta
-            if state.waiting_for_input:
-                result["waiting_for_input"] = True
-            
-            return result
     
     async def process_user_input(self, session_id: str, user_input: str) -> Dict[str, Any]:
         """
@@ -173,16 +217,34 @@ class AdaptiveLearningAgent:
         if not state.waiting_for_input:
             return {"error": "El agente no está esperando respuesta", "state_metadata": self._get_state_metadata(state)}
         
-        # Evaluar la respuesta
-        eval_result = await evaluate_answer(state, user_input)
-        
-        # Marcar que ya no está esperando input
-        state.waiting_for_input = False
-        
-        # Añadir metadatos del estado actualizado
-        eval_result["state_metadata"] = self._get_state_metadata(state)
-        
-        return eval_result
+        try:
+            # Evaluar la respuesta
+            eval_result = await evaluate_answer(state, user_input)
+            
+            # Marcar que ya no está esperando input
+            state.waiting_for_input = False
+            
+            # Añadir metadatos del estado actualizado
+            eval_result["state_metadata"] = self._get_state_metadata(state)
+            
+            # Determinar el siguiente paso (similar a LangGraph)
+            if not state.waiting_for_input:
+                next_determination = await determine_next_step(state)
+                eval_result["next_action"] = next_determination.get("action")
+            
+            return eval_result
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            
+            # Manejar errores de manera uniforme
+            state.last_action_type = "error"
+            return {
+                "action": "error",
+                "error": str(e),
+                "fallback_text": f"Hubo un error evaluando tu respuesta. Intentemos un enfoque diferente.",
+                "state_metadata": self._get_state_metadata(state)
+            }
     
     async def _execute_action(self, action: str, state: StudentState) -> Dict[str, Any]:
         """
@@ -218,7 +280,10 @@ class AdaptiveLearningAgent:
                 
             else:
                 result = {"error": f"Acción desconocida: {action}"}
-                
+            
+            # Añadir consistency con LangGraph - añadir un campo "next_node"
+            result["next_node"] = "determine_next_step"
+            
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -236,15 +301,28 @@ class AdaptiveLearningAgent:
         Returns:
             Diccionario con metadatos relevantes
         """
+        # Get current_cpa_phase value - handle both enum and string values
+        cpa_phase = state.current_cpa_phase
+        if hasattr(cpa_phase, 'value'):
+            # It's an enum, extract the value
+            cpa_phase = cpa_phase.value
+        
+        # Get last_evaluation value - handle both enum and string values
+        last_evaluation = state.last_evaluation
+        if hasattr(last_evaluation, 'value'):
+            # It's an enum, extract the value
+            last_evaluation = last_evaluation.value
+        
         return {
             "session_id": state.session_id,
             "current_topic": state.current_topic,
-            "current_cpa_phase": state.current_cpa_phase.value,
+            "current_cpa_phase": cpa_phase,
             "mastery": get_current_mastery(state),
             "waiting_for_input": state.waiting_for_input,
             "consecutive_correct": state.consecutive_correct,
             "consecutive_incorrect": state.consecutive_incorrect,
             "last_action": state.last_action_type,
+            "last_evaluation": last_evaluation,
             "personalized_theme": state.personalized_theme
         }
     

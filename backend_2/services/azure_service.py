@@ -182,6 +182,23 @@ async def invoke_with_prompty(template_path: str, **kwargs) -> str:
     Returns:
         Texto de respuesta del modelo
     """
+    # Debug: Print path information to help with troubleshooting
+    print(f"Loading Prompty template from: {template_path}")
+    print(f"Current working directory: {os.getcwd()}")
+    
+    # Check if template path exists
+    if not os.path.exists(template_path):
+        print(f"WARNING: Template path does not exist: {template_path}")
+        # Try to resolve the path using alternative strategies
+        base_name = os.path.basename(template_path)
+        alt_path = os.path.join("prompts", base_name)
+        if os.path.exists(alt_path):
+            print(f"Found template at alternative path: {alt_path}")
+            template_path = alt_path
+        else:
+            print(f"Could not find template at: {alt_path}")
+            return f"Error: Template not found at {template_path} or {alt_path}"
+    
     # Comprobar si OpenAI está disponible
     if not OPENAI_AVAILABLE:
         return f"[SIMULACIÓN] Respuesta para plantilla {template_path} con variables {kwargs}"
@@ -210,7 +227,7 @@ async def invoke_with_prompty(template_path: str, **kwargs) -> str:
         print(f"Error usando plantilla Prompty {template_path}: {e}")
         # Proporcionar una respuesta de fallback en caso de error
         return f"No se pudo generar contenido: {str(e)}"
-
+    
 async def invoke_llm(prompt: str, system_message: Optional[str] = None, temperature: float = 0.2) -> str:
     """
     Invoca el LLM de Azure OpenAI con un prompt simple.

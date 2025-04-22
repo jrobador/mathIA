@@ -4,12 +4,9 @@ Estas funciones corresponden a los nodos en el diagrama de flujo original.
 Integra correctamente los servicios de Azure.
 """
 
-from typing import Dict, Any, Optional, List
-import random
+from typing import Dict, Any
 import re
 import os
-import json
-from datetime import datetime
 
 from models.student_state import (
     StudentState, EvaluationOutcome, CPAPhase, 
@@ -20,8 +17,36 @@ from services.azure_service import (
     invoke_llm, invoke_with_prompty, generate_image, generate_speech
 )
 
-# Directorio de prompts para las plantillas Prompty
-PROMPTS_DIR = os.path.join(os.path.dirname(__file__), "..", "prompts")
+def get_prompts_dir():
+    """
+    Determines the correct prompts directory path using multiple resolution strategies.
+    This handles different execution contexts (running from project root or subdirectory).
+    """
+    # Strategy 1: Relative to the file location
+    file_relative_path = os.path.join(os.path.dirname(__file__), "..", "prompts")
+    if os.path.exists(file_relative_path):
+        print(f"Using prompts directory relative to file: {file_relative_path}")
+        return os.path.abspath(file_relative_path)
+    
+    # Strategy 2: Relative to current working directory
+    cwd_relative_path = os.path.join(os.getcwd(), "prompts")
+    if os.path.exists(cwd_relative_path):
+        print(f"Using prompts directory relative to working directory: {cwd_relative_path}")
+        return os.path.abspath(cwd_relative_path)
+    
+    # Strategy 3: Check if we're in a subdirectory
+    parent_dir_path = os.path.join(os.getcwd(), "..", "prompts")
+    if os.path.exists(parent_dir_path):
+        print(f"Using prompts directory relative to parent directory: {parent_dir_path}")
+        return os.path.abspath(parent_dir_path)
+    
+    # Strategy 4: Fallback - use file relative path even if it doesn't exist yet
+    print(f"WARNING: Could not find prompts directory. Using best guess: {file_relative_path}")
+    return os.path.abspath(file_relative_path)
+
+# Define prompts directory using the function
+PROMPTS_DIR = get_prompts_dir()
+print(f"Prompts directory set to: {PROMPTS_DIR}")
 
 # Funciones principales del agente (basadas en los nodos del diagrama)
 
@@ -92,6 +117,16 @@ async def present_theory(state: StudentState) -> Dict[str, Any]:
         # Construir ruta a la plantilla de teoría
         theory_template_path = os.path.join(PROMPTS_DIR, "theory.prompty")
         
+        # Get CPA phase value - handle both enum and string
+        cpa_phase = state.current_cpa_phase
+        if hasattr(cpa_phase, 'value'):
+            cpa_phase_value = cpa_phase.value
+        else:
+            cpa_phase_value = cpa_phase
+            
+        # Get personalized theme
+        theme = state.personalized_theme
+        
         # Verificar si la plantilla existe
         if os.path.exists(theory_template_path):
             # Usar plantilla Prompty para generar teoría
@@ -99,14 +134,14 @@ async def present_theory(state: StudentState) -> Dict[str, Any]:
                 theory_template_path,
                 topic_title=topic.title,
                 topic_description=topic.description,
-                cpa_phase=state.current_cpa_phase.value,
-                theme=state.personalized_theme,
+                cpa_phase=cpa_phase_value,
+                theme=theme,
                 subtopics=", ".join(topic.subtopics)
             )
         else:
             # Fallback a prompt directo si no hay plantilla
             prompt = f"""Genera una explicación teórica sobre {topic.title} para un estudiante.
-            Fase: {state.current_cpa_phase.value}, Tema: {state.personalized_theme}.
+            Fase: {cpa_phase_value}, Tema: {theme}.
             Descripción del tema: {topic.description}
             Subtemas: {', '.join(topic.subtopics)}
             
@@ -116,10 +151,10 @@ async def present_theory(state: StudentState) -> Dict[str, Any]:
             theory_content = await invoke_llm(prompt, system_message)
         
         # Generar imagen y audio si es necesario
-        visual_needed = state.current_cpa_phase != CPAPhase.ABSTRACT
+        visual_needed = cpa_phase_value != CPAPhase.ABSTRACT.value
         image_url = None
         if visual_needed:
-            img_prompt = f"Visualización educativa para el concepto matemático: {topic.title}, con tema {state.personalized_theme}, estilo claro y educativo para niños"
+            img_prompt = f"Visualización educativa para el concepto matemático: {topic.title}, con tema {theme}, estilo claro y educativo para niños"
             image_url = await generate_image(img_prompt)
         
         # Generar audio
@@ -145,12 +180,14 @@ async def present_theory(state: StudentState) -> Dict[str, Any]:
         
     except Exception as e:
         print(f"Error en present_theory: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "action": "error",
             "error": str(e),
             "fallback_text": f"No pude generar explicación teórica para {topic.title}. Probemos con práctica."
         }
-
+    
 async def present_guided_practice(state: StudentState) -> Dict[str, Any]:
     """
     Presenta un ejercicio guiado con más apoyo
