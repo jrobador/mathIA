@@ -6,6 +6,14 @@ backend/.env
 backend/instance/
 backend/static/*
 
+# Backend Python 2
+backend_2/venv/
+backend_2/__pycache__/
+backend_2/*.pyc
+backend_2/.env
+backend_2/instance/
+backend_2/static/*
+
 # Frontend Node
 frontend/node_modules/
 frontend/build/
@@ -21,3 +29,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+/backend_2/api/__pycache__
+/backend_2/agents/__pycache__
+/backend_2/models/__pycache__
+/backend_2/data/__pycache__
