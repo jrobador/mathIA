@@ -39,11 +39,11 @@ class MathTutorClient {
       ...(config.headers || {}),
     };
     this.currentSessionId = null;
-    this.requestTimeoutMs = 90000; // Increased: 45 second timeout for regular requests
-    this.quickTimeoutMs = 10000;   // Increased: 10 second timeout for quick responses
-    this.pollingIntervalMs = 1500; // Increased: 1.5 second interval between polls
-    this.requestRetryCount = 2;    // Number of retries for failed requests
-    this.processingRequest = false; // Track if a process request is in flight
+    this.requestTimeoutMs = 3000000;
+    this.quickTimeoutMs = 300000;  
+    this.pollingIntervalMs = 1500; 
+    this.requestRetryCount = 2;    
+    this.processingRequest = false;
     
     // Try to restore session from localStorage if available
     this._restoreSession();
@@ -77,9 +77,6 @@ class MathTutorClient {
 
       console.log("Sending session start request to backend...");
       
-      // Make API request with a shorter timeout - we expect quick response now
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.quickTimeoutMs);
       
       const response = await fetch(`${this.baseUrl}/session/start`, {
         method: 'POST',
@@ -89,12 +86,8 @@ class MathTutorClient {
           initial_message,
           config: sessionConfig,
           learning_path
-        }),
-        signal: controller.signal
-      });
+        })      });
       
-      clearTimeout(timeoutId);
-
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.detail || 'Error starting session');
@@ -209,23 +202,14 @@ class MathTutorClient {
       // Try up to retryCount times
       for (let attempt = 0; attempt <= this.requestRetryCount; attempt++) {
         try {
-          // Make API request with timeout
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => {
-            console.warn(`Request timeout after ${this.requestTimeoutMs}ms, aborting...`);
-            controller.abort(new Error('Request timed out'));
-          }, this.requestTimeoutMs);
           
           console.log(`Sending input to backend (attempt ${attempt + 1}/${this.requestRetryCount + 1})...`);
           const response = await fetch(`${this.baseUrl}/session/${targetSessionId}/process`, {
             method: 'POST',
             headers: this.headers,
-            body: JSON.stringify({ message }),
-            signal: controller.signal
+            body: JSON.stringify({ message })
           });
-          
-          clearTimeout(timeoutId);
-          
+                    
           if (!response.ok) {
             const errorData = await response.json();
             throw new Error(errorData.detail || 'Error processing input');
@@ -388,16 +372,12 @@ class MathTutorClient {
     }
     
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
       
       const response = await fetch(`${this.baseUrl}/session/${targetSessionId}/status`, {
         method: 'GET',
-        headers: this.headers,
-        signal: controller.signal
-      });
+        headers: this.headers
+        });
       
-      clearTimeout(timeoutId);
       return response.ok;
     } catch (error) {
       console.warn('Session health check failed:', error);

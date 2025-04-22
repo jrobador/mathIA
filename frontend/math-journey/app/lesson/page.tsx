@@ -286,7 +286,7 @@ export default function LessonPage() {
         {/* Content Area */}
         <AnimatePresence mode="wait">
           {/* Loading State */}
-          {isLoading && !currentOutput && !errorState.isError && (
+          {isLoading && (
             <motion.div
               key="loading"
               initial={{ opacity: 0 }}
@@ -295,7 +295,8 @@ export default function LessonPage() {
               className="w-full max-w-3xl bg-white rounded-2xl shadow-xl my-4 md:my-6 relative border border-gray-200 overflow-hidden p-4 md:p-6 min-h-[400px] md:min-h-[450px] flex flex-col justify-center items-center"
             >
               <Loader2 className="h-12 w-12 text-indigo-600 animate-spin mb-4" />
-              <p className="text-lg text-gray-600">Setting up your math lesson...</p>
+              <p className="text-lg text-gray-600 mb-2">Setting up your math lesson...</p>
+              <p className="text-sm text-gray-500">This might take a moment if images are being generated.</p>
             </motion.div>
           )}
 

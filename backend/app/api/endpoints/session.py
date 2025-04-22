@@ -284,10 +284,7 @@ async def process_input(session_id: str, request: ProcessInputRequest = Body(...
         
         try:
             # Use wait_for instead of timeout for Python compatibility
-            result_state = await asyncio.wait_for(
-                compiled_app.ainvoke(current_state), 
-                timeout=20.0
-            )
+            result_state = await compiled_app.ainvoke(current_state)
             
             # After processing, clear the next state marker
             if "next" in result_state:
