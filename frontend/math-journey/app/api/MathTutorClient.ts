@@ -1,3 +1,6 @@
+// FILE: MathTutorClient.ts
+// (Assuming this is located at something like "@/app/api/MathTutorClient.ts")
+
 /**
  * Cliente API para interactuar con el backend del agente matemático
  * Ahora soporta comunicación vía WebSockets y HTTP como fallback
@@ -11,11 +14,12 @@ import {
   SessionStatusResponse,
   DiagnosticQuestionResult,
   DiagnosticResults,
-  AgentOutput
-} from "@/types/api";
+  AgentOutput,
+} from "@/types/api"; // Adjust path if needed
 
 // Configuración API por defecto
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
 class MathTutorClient {
   private baseUrl: string;
@@ -23,12 +27,12 @@ class MathTutorClient {
   private headers: Record<string, string>;
   private currentSessionId: string | null;
   private wsConnection: WebSocket | null;
-  private messageCallbacks: Map<string, (data: any) => void>;
-  private messageHandlers: Array<(data: any) => void>;
+  private messageCallbacks: Map<string, (data: any) => void>; // For request-response over WS
+  private messageHandlers: Array<(data: any) => void>; // For broadcast/push messages
   private reconnectAttempts: number;
   private maxReconnectAttempts: number;
   private reconnectTimeout: number;
-  private processingRequest: boolean;
+  private processingRequest: boolean; // Simple lock to prevent concurrent sends
   private reconnectTimer: ReturnType<typeof setTimeout> | null;
 
   /**
@@ -36,133 +40,221 @@ class MathTutorClient {
    */
   constructor(config: MathTutorClientConfig = {}) {
     this.baseUrl = config.baseUrl || API_BASE_URL;
-    this.wsBaseUrl = this.baseUrl.replace(/^http/, 'ws');
+    // Ensure wsBaseUrl replaces http/https correctly
+    this.wsBaseUrl = this.baseUrl.replace(/^http/, "ws");
     this.headers = {
-      'Content-Type': 'application/json',
-      ...(config.headers || {})
+      "Content-Type": "application/json",
+      ...(config.headers || {}),
     };
     this.currentSessionId = null;
     this.wsConnection = null;
     this.messageCallbacks = new Map();
     this.messageHandlers = [];
     this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 5;
-    this.reconnectTimeout = 1000;
+    this.maxReconnectAttempts = 5; // Or make configurable
+    this.reconnectTimeout = 1000; // Initial reconnect delay
     this.processingRequest = false;
     this.reconnectTimer = null;
-    
-    // Try to restore session from localStorage if available
+
+    // Try to restore session ID from localStorage if available
+    // **Crucially, we no longer automatically connect here**
     this._restoreSession();
+    console.log(`Client initialized. Restored session ID (if any): ${this.currentSessionId}`);
+  }
+
+  public getCurrentSessionId(): string | null {
+    return this.currentSessionId;
+  }
+
+  public hasActiveSession(): boolean {
+    // Check both the internal ID and WebSocket state for robustness
+    return this.currentSessionId !== null;
+     // Or potentially: return this.currentSessionId !== null && this.isWebSocketConnected();
+     // Depending on the desired definition of "active". Let's stick with just ID check for now.
+  }
+
+  async requestContinue(sessionId: string | null = null): Promise<void> {
+    const targetSessionId = sessionId || this.currentSessionId;
+    if (!targetSessionId) {
+      console.error("No active session ID available for requestContinue.");
+      throw new Error("No hay una sesión activa.");
+    }
+
+    if (!this.isWebSocketConnected()) {
+      console.warn(`WebSocket not connected for session ${targetSessionId}. Cannot send 'continue'. Trying HTTP fallback (if available/implemented).`);
+      // Optional: Implement an HTTP fallback if your backend supports GET /api/sessions/{id}/continue
+      // For now, we'll throw an error if WS is not connected for this action.
+      throw new Error("Connection lost. Cannot continue session.");
+    }
+    try {
+      this.wsConnection?.send(
+        JSON.stringify({
+          action: "continue",
+          requestId: uuidv4(), // Still good practice to include an ID
+        })
+      );
+      // We don't wait for a specific response here, the hook will handle the incoming agent_response
+    } catch (error) {
+      console.error("Error sending 'continue' action via WebSocket:", error);
+      throw error; // Re-throw to be caught by the calling hook/component
+    }
   }
 
   /**
-   * Start a new tutoring session
+   * Start a new tutoring session using the /ws/new_session endpoint.
    */
   async startSession({
-    personalized_theme = 'space',
-    initial_message = null,
+    personalized_theme = "space",
+    // initial_message = null, // Not directly used in this backend version's create_session
     config = null,
-    diagnostic_results = null,
-    learning_path = null
+    // diagnostic_results = null, // Not directly used in this backend version's create_session
+    learning_path = null,
   }: StartSessionOptions = {}): Promise<StartSessionResponse> {
-    try {
-      // Configure session based on inputs
-      let sessionConfig = config || {};
-      
-      // Apply diagnostic results if available
-      if (diagnostic_results) {
-        sessionConfig.initial_difficulty = diagnostic_results.recommended_level || 'beginner';
-      }
-      
-      // Set initial topic based on learning path
-      if (learning_path) {
-        sessionConfig.initial_topic = this._mapLearningPathToTopic(learning_path);
+    console.log("Attempting to start new session via WebSocket...");
+
+    // Ensure any previous connection attempts are cleared
+    if (this.wsConnection) {
+        console.log("Closing existing WS connection before starting new session.");
+        // Prevent automatic reconnection attempts from the old connection
+        this.maxReconnectAttempts = 0; // Temporarily disable reconnect
+        this.wsConnection.close();
+        this.wsConnection = null;
+        this.maxReconnectAttempts = 5; // Restore reconnect setting
+    }
+    if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+    }
+    this.currentSessionId = null; // Clear any restored ID
+    this._clearSession(); // Clear from localStorage too
+
+
+    // Determine topic_id based on learning_path or default
+    const topicId = learning_path
+      ? this._mapLearningPathToTopic(learning_path)
+      : "fractions_introduction"; // Default topic
+
+    // Use WebSocket to create the session
+    return new Promise<StartSessionResponse>((resolve, reject) => {
+      let ws: WebSocket | null = null;
+      try {
+          ws = new WebSocket(`${this.wsBaseUrl}/ws/new_session`);
+      } catch (error) {
+           console.error("Failed to create WebSocket for new session:", error);
+           // Immediately try HTTP fallback if WebSocket creation fails
+           return this._startSessionHttp({ personalized_theme, learning_path, config })
+                    .then(resolve)
+                    .catch(reject);
       }
 
-      console.log("Iniciando nueva sesión vía WebSocket...");
-      
-      // Create WebSocket connection to start new session
-      return new Promise<StartSessionResponse>((resolve, reject) => {
-        const ws = new WebSocket(`${this.wsBaseUrl}/ws/new_session`);
-        
-        ws.onopen = () => {
-          console.log("WebSocket conectado para nueva sesión");
-          ws.send(JSON.stringify({
-            action: 'create_session',
+
+      const connectionTimeout = setTimeout(() => {
+        console.warn("WebSocket connection timeout for new session.");
+        if (ws && ws.readyState !== WebSocket.OPEN) {
+             ws.close(); // Attempt to close if stuck
+             // Try HTTP fallback on timeout
+             this._startSessionHttp({ personalized_theme, learning_path, config })
+                .then(resolve)
+                .catch(reject);
+        }
+      }, 10000); // 10 second timeout for initial connection
+
+
+      ws.onopen = () => {
+        clearTimeout(connectionTimeout); // Clear timeout on successful open
+        console.log("WebSocket connected for new session request.");
+        // Send the create_session request
+        ws?.send(
+          JSON.stringify({
+            action: "create_session",
             data: {
-              topic_id: sessionConfig.initial_topic || this._mapLearningPathToTopic(learning_path || 'fractions'),
+              topic_id: topicId,
               personalized_theme,
-              user_id: config?.user_id,
-              initial_mastery: 0.0
+              user_id: config?.user_id, // Pass user_id if available in config
+              initial_mastery: 0.0, // Or pass if available
+            },
+          })
+        );
+      };
+
+      ws.onerror = (event) => {
+        clearTimeout(connectionTimeout);
+        console.error("WebSocket error on new session request:", event);
+        // Close the potentially broken socket
+        ws?.close();
+        // Try HTTP fallback on error
+        this._startSessionHttp({ personalized_theme, learning_path, config })
+          .then(resolve)
+          .catch(reject);
+      };
+
+      ws.onmessage = (event) => {
+        clearTimeout(connectionTimeout); // Clear timeout on successful message
+        try {
+          const response = JSON.parse(event.data as string);
+          console.log("Received response on new session WebSocket:", response);
+
+          if (response.type === "session_created") {
+            // --- Session Created Successfully ---
+            const newSessionId = response.data.session_id;
+            const initialResult = response.data.initial_result; // Get the first agent step result
+
+            if (!newSessionId || !initialResult) {
+                 console.error("Invalid session_created response:", response.data);
+                 reject(new Error("Received invalid data from server after session creation."));
+                 ws?.close();
+                 return;
             }
-          }));
-        };
-        
-        ws.onerror = (event) => {
-          console.error("Error de WebSocket:", event);
-          reject(new Error("Error de conexión WebSocket"));
-          
-          // Try fallback with HTTP
-          this._startSessionHttp({
-            personalized_theme,
-            initial_message,
-            learning_path,
-            diagnostic_results
-          }).then(resolve).catch(reject);
-        };
-        
-        ws.onmessage = (event) => {
-          try {
-            const response = JSON.parse(event.data);
-            console.log("Respuesta WebSocket de nueva sesión:", response);
-            
-            if (response.type === "session_created") {
-              // Store session information
-              this.currentSessionId = response.data.session_id;
-              this._saveSession();
-              
-              // Create response object
-              const sessionResponse: StartSessionResponse = {
-                session_id: response.data.session_id,
-                initial_output: {
-                  text: response.data.result.text || "¡Bienvenido a tu sesión de aprendizaje!",
-                  image_url: response.data.result.image_url,
-                  audio_url: response.data.result.audio_url,
-                  prompt_for_answer: response.data.result.requires_input || false
-                },
-                status: "active"
-              };
-              
-              // Normalize URLs
-              this._normalizeContentUrls(sessionResponse.initial_output);
-              
-              // Close temporary connection
-              ws.close();
-              
-              // Connect to the session WebSocket
-              this._connectToSessionWebSocket();
-              
-              resolve(sessionResponse);
-            } else if (response.type === "error") {
-              reject(new Error(response.message || "Error al crear la sesión"));
-              ws.close();
-            }
-          } catch (error) {
-            console.error("Error procesando mensaje WebSocket:", error);
-            reject(error as Error);
-            ws.close();
+
+            // Store session information
+            this.currentSessionId = newSessionId;
+            this._saveSession(); // Save to localStorage
+
+            // Create the response object for the hook
+            const sessionResponse: StartSessionResponse = {
+              session_id: newSessionId,
+              initial_output: { // Format the initial agent step result
+                text: initialResult.text || "¡Bienvenido!", // Provide default text
+                image_url: initialResult.image_url,
+                audio_url: initialResult.audio_url,
+                // Use waiting_for_input from the result's metadata or the result itself
+                prompt_for_answer: initialResult.waiting_for_input ?? initialResult.state_metadata?.waiting_for_input ?? false,
+                evaluation: initialResult.evaluation_type, // Map if needed
+                is_final_step: initialResult.is_final_step || false,
+              },
+              status: "active",
+            };
+
+            // Normalize relative URLs to absolute
+            this._normalizeContentUrls(sessionResponse.initial_output);
+
+            // Close this temporary WebSocket connection
+            ws?.close();
+
+            // NOW, connect to the persistent WebSocket for this session
+            this._connectToSessionWebSocket(); // Connect using the NEWLY set this.currentSessionId
+
+            resolve(sessionResponse);
+          } else if (response.type === "error") {
+            reject(new Error(response.message || "Unknown error creating session"));
+            ws?.close();
+          } else {
+            console.warn("Received unexpected message type on new session WebSocket:", response.type);
           }
-        };
-        
-        ws.onclose = () => {
-          console.log("WebSocket de nueva sesión cerrado");
-        };
-      });
-      
-    } catch (error) {
-      console.error('Error iniciando sesión:', error);
-      throw error;
-    }
+        } catch (error) {
+          console.error("Error parsing message on new session WebSocket:", error);
+          reject(error as Error);
+          ws?.close(); // Close on parse error
+        }
+      };
+
+      ws.onclose = (event) => {
+        clearTimeout(connectionTimeout); // Clear timeout if closed before message/error
+        console.log(`New session WebSocket closed. Code: ${event.code}, Reason: ${event.reason}`);
+        // If it closes without resolving/rejecting, it might indicate a problem or that HTTP fallback was triggered.
+        // Avoid rejecting here again if HTTP fallback is already handling it.
+      };
+    });
   }
 
   /**
@@ -170,522 +262,673 @@ class MathTutorClient {
    */
   private async _startSessionHttp({
     personalized_theme = 'space',
-    initial_message = null,
+    // initial_message = null, // Not used by this endpoint
     config = null,
-    diagnostic_results = null,
+    // diagnostic_results = null, // Not used by this endpoint
     learning_path = null
   }: StartSessionOptions = {}): Promise<StartSessionResponse> {
-    console.log("Fallback: Iniciando sesión vía HTTP...");
-    
-    const response = await fetch(`${this.baseUrl}/api/sessions`, {
-      method: 'POST',
-      headers: this.headers,
-      body: JSON.stringify({
-        topic_id: learning_path ? this._mapLearningPathToTopic(learning_path) : 'fractions_introduction',
-        personalized_theme,
-        initial_mastery: 0.0
-      })
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.detail || 'Error iniciando sesión vía HTTP');
-    }
-    
-    const data = await response.json();
-    this.currentSessionId = data.session_id;
-    this._saveSession();
-    
-    // Connect to the session WebSocket after starting it via HTTP
-    this._connectToSessionWebSocket();
-    
-    return {
-      session_id: data.session_id,
-      initial_output: data.result,
-      status: "active"
-    };
-  }
+    console.warn("WebSocket failed, falling back to HTTP for starting session...");
 
-  /**
-   * Process user input in an active session
-   */
-  async processInput(message: string, sessionId: string | null = null): Promise<ProcessInputResponse> {
-    if (this.processingRequest) {
-      console.warn("Ya hay una solicitud en proceso");
-      throw new Error('Una solicitud ya está en progreso. Por favor espere.');
-    }
-    
-    const targetSessionId = sessionId || this.currentSessionId;
-    
-    if (!targetSessionId) {
-      throw new Error('No hay una sesión activa. Inicie una sesión primero.');
-    }
-    
-    this.processingRequest = true;
-    
+    const topicId = learning_path ? this._mapLearningPathToTopic(learning_path) : 'fractions_introduction';
+
     try {
-      // Check if WebSocket is available
-      if (this.wsConnection && this.wsConnection.readyState === WebSocket.OPEN) {
-        // Use WebSocket for communication
-        return new Promise<ProcessInputResponse>((resolve, reject) => {
-          // Generate unique ID for the request
-          const requestId = Math.random().toString(36).substring(2, 9);
-          
-          // Set up callback for this request
-          this.messageCallbacks.set(requestId, (data) => {
-            // Remove the callback once called
-            this.messageCallbacks.delete(requestId);
-            
-            if (data.type === "error") {
-              reject(new Error(data.message || "Error procesando la entrada"));
-            } else if (data.type === "agent_response") {
-              // Create response object
-              const inputResponse: ProcessInputResponse = {
-                session_id: targetSessionId,
-                agent_output: {
-                  text: data.data.text || "He procesado tu entrada.",
-                  image_url: data.data.image_url,
-                  audio_url: data.data.audio_url,
-                  prompt_for_answer: data.data.requires_input || false,
-                  evaluation: data.data.evaluation_type,
-                  is_final_step: data.data.is_final_step || false
-                },
-                mastery_level: data.data.state_metadata?.mastery || 0
-              };
-              
-              // Normalize URLs
-              this._normalizeContentUrls(inputResponse.agent_output);
-              
-              resolve(inputResponse);
-            } else {
-              reject(new Error("Tipo de respuesta inesperado"));
-            }
-          });
-          
-          // Send message via WebSocket
-          this.wsConnection?.send(JSON.stringify({
-            action: 'submit_answer',
-            requestId,
-            data: {
-              answer: message
-            }
-          }));
-          
-          // Set timeout in case no response is received
-          setTimeout(() => {
-            if (this.messageCallbacks.has(requestId)) {
-              this.messageCallbacks.delete(requestId);
-              reject(new Error("Tiempo de espera agotado"));
-            }
-          }, 30000);
-        }).finally(() => {
-          this.processingRequest = false;
-        });
-      } else {
-        // Fallback to HTTP API
-        console.log("WebSocket no disponible, usando HTTP para enviar mensaje...");
-        const response = await fetch(`${this.baseUrl}/api/sessions/${targetSessionId}/answer`, {
+        const response = await fetch(`${this.baseUrl}/api/sessions`, {
           method: 'POST',
           headers: this.headers,
-          body: JSON.stringify({ answer: message })
+          body: JSON.stringify({
+            topic_id: topicId,
+            personalized_theme,
+            initial_mastery: 0.0, // Or pass if available
+            user_id: config?.user_id
+          })
         });
-        
+
         if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.detail || 'Error procesando la entrada vía HTTP');
+          let errorDetail = 'Error iniciando sesión vía HTTP';
+          try {
+              const errorData = await response.json();
+              errorDetail = errorData.detail || errorDetail;
+          } catch (e) { /* Ignore parse error */ }
+          throw new Error(errorDetail);
         }
-        
-        const data = await response.json();
-        this.processingRequest = false;
-        
-        // Normalize URLs
-        if (data.agent_output) {
-          this._normalizeContentUrls(data.agent_output);
+
+        const data = await response.json(); // Should match SessionResponse from http_routes
+
+        if (!data.session_id || !data.result) {
+             throw new Error("Invalid response from HTTP /api/sessions");
         }
-        
-        return data as ProcessInputResponse;
-      }
-    } catch (error) {
-      console.error('Error procesando la entrada:', error);
-      this.processingRequest = false;
-      throw error;
+
+        this.currentSessionId = data.session_id;
+        this._saveSession();
+
+        // Connect to the session WebSocket AFTER successfully starting via HTTP
+        this._connectToSessionWebSocket();
+
+        const initialResult = data.result;
+        const sessionResponse: StartSessionResponse = {
+            session_id: data.session_id,
+            initial_output: {
+                text: initialResult.text || "¡Bienvenido!",
+                image_url: initialResult.image_url,
+                audio_url: initialResult.audio_url,
+                prompt_for_answer: initialResult.waiting_for_input ?? initialResult.state_metadata?.waiting_for_input ?? false,
+                evaluation: initialResult.evaluation_type,
+                is_final_step: initialResult.is_final_step || false,
+            },
+            status: "active"
+        };
+        this._normalizeContentUrls(sessionResponse.initial_output);
+        return sessionResponse;
+
+    } catch(error) {
+        console.error("HTTP fallback for startSession failed:", error);
+        throw error; // Re-throw the error to be caught by the caller
     }
   }
 
   /**
-   * Get the current status of a session
+   * Process user input in an active session via WebSocket (preferred) or HTTP fallback.
    */
-  async getSessionStatus(sessionId: string | null = null): Promise<SessionStatusResponse> {
-    const targetSessionId = sessionId || this.currentSessionId;
-    
-    if (!targetSessionId) {
-      throw new Error('No hay una sesión activa.');
+  async processInput(
+    message: string,
+    sessionId: string | null = null
+  ): Promise<ProcessInputResponse> {
+    if (this.processingRequest) {
+      console.warn("Request already in progress, please wait.");
+      // Decide whether to throw an error or just return a specific status
+      throw new Error("Una solicitud ya está en progreso. Por favor espere.");
     }
-    
-    try {
-      // Check if WebSocket is available
-      if (this.wsConnection && this.wsConnection.readyState === WebSocket.OPEN) {
-        return new Promise<SessionStatusResponse>((resolve, reject) => {
-          // Generate unique ID for the request
-          const requestId = Math.random().toString(36).substring(2, 9);
-          
-          // Set up callback for this request
-          this.messageCallbacks.set(requestId, (data) => {
-            // Remove the callback once called
-            this.messageCallbacks.delete(requestId);
-            
-            if (data.type === "error") {
-              reject(new Error(data.message || "Error obteniendo estado de sesión"));
-            } else if (data.type === "state_update") {
-              resolve(data.data as SessionStatusResponse);
-            } else {
-              reject(new Error("Tipo de respuesta inesperado"));
-            }
-          });
-          
-          // Send message via WebSocket
-          this.wsConnection?.send(JSON.stringify({
-            action: 'get_state',
-            requestId
-          }));
-          
-          // Set timeout in case no response is received
-          setTimeout(() => {
-            if (this.messageCallbacks.has(requestId)) {
-              this.messageCallbacks.delete(requestId);
-              reject(new Error("Tiempo de espera agotado"));
-            }
-          }, 5000);
+
+    const targetSessionId = sessionId || this.currentSessionId;
+    if (!targetSessionId) {
+      console.error("No active session ID available for processInput.");
+      throw new Error("No hay una sesión activa. Inicie una sesión primero.");
+    }
+
+    this.processingRequest = true;
+
+    // Prefer WebSocket
+    if (this.isWebSocketConnected()) {
+        console.log(`Sending input via WebSocket for session ${targetSessionId}`);
+        return new Promise<ProcessInputResponse>((resolve, reject) => {
+            const requestId = uuidv4(); // Use a robust UUID
+
+            const timeoutHandle = setTimeout(() => {
+                if (this.messageCallbacks.has(requestId)) {
+                    this.messageCallbacks.delete(requestId);
+                    console.error(`Timeout waiting for response to input request ${requestId}`);
+                    this.processingRequest = false; // Unlock on timeout
+                    reject(new Error("Tiempo de espera agotado para procesar la entrada."));
+                }
+            }, 30000); // 30 seconds timeout
+
+            this.messageCallbacks.set(requestId, (response) => {
+                clearTimeout(timeoutHandle); // Clear timeout on response
+                this.messageCallbacks.delete(requestId); // Clean up callback
+                this.processingRequest = false; // Unlock after processing
+
+                console.log(`Received WS response for request ${requestId}:`, response);
+
+                if (response.type === "error") {
+                    reject(new Error(response.message || "Error procesando la entrada desde el servidor."));
+                } else if (response.type === "agent_response") {
+                     // The backend now sends the response(s) in response.data
+                    const agentData = response.data; // This might be a single response or a list
+
+                    // We need to format this into the expected ProcessInputResponse
+                    // Let's take the *last* agent response in the list if multiple were sent,
+                    // as that likely contains the most recent state.
+                    const relevantAgentData = Array.isArray(agentData) ? agentData[agentData.length - 1] : agentData;
+
+                    if (!relevantAgentData) {
+                         reject(new Error("Respuesta inválida del agente recibida."));
+                         return;
+                    }
+
+                    const inputResponse: ProcessInputResponse = {
+                        session_id: targetSessionId,
+                        agent_output: {
+                            text: relevantAgentData.text || "",
+                            image_url: relevantAgentData.image_url,
+                            audio_url: relevantAgentData.audio_url,
+                            prompt_for_answer: relevantAgentData.waiting_for_input ?? relevantAgentData.state_metadata?.waiting_for_input ?? false,
+                            evaluation: relevantAgentData.evaluation_type || relevantAgentData.last_evaluation || null, // Try multiple fields
+                            is_final_step: relevantAgentData.is_final_step || false,
+                        },
+                        mastery_level: relevantAgentData.state_metadata?.mastery ?? 0, // Get mastery from metadata
+                    };
+                    this._normalizeContentUrls(inputResponse.agent_output);
+                    resolve(inputResponse);
+                } else {
+                    console.warn("Received unexpected message type for input request:", response.type);
+                    reject(new Error(`Tipo de respuesta inesperado del servidor: ${response.type}`));
+                }
+            });
+
+            // Send the message
+            this.wsConnection?.send(
+                JSON.stringify({
+                    action: "submit_answer",
+                    requestId: requestId,
+                    data: {
+                        answer: message,
+                    },
+                })
+            );
+        }).catch(error => {
+            // Ensure lock is released on promise rejection as well
+            this.processingRequest = false;
+            throw error;
         });
-      } else {
-        // Fallback to HTTP API
-        const response = await fetch(`${this.baseUrl}/api/sessions/${targetSessionId}`, {
-          method: 'GET',
-          headers: this.headers,
-        });
-        
+
+    } else {
+      // Fallback to HTTP
+      console.warn(`WebSocket not connected for session ${targetSessionId}. Using HTTP fallback for processInput.`);
+      try {
+        const response = await fetch(
+          `${this.baseUrl}/api/sessions/${targetSessionId}/answer`,
+          {
+            method: "POST",
+            headers: this.headers,
+            body: JSON.stringify({ answer: message }),
+          }
+        );
+
         if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.detail || 'Error obteniendo estado de sesión');
+          let errorDetail = "Error procesando la entrada vía HTTP";
+           try {
+              const errorData = await response.json();
+              errorDetail = errorData.detail || errorDetail;
+          } catch(e) { /* Ignore */ }
+          throw new Error(errorDetail);
         }
-        
-        const data = await response.json();
-        
-        // Normalize URLs in agent_output if present
-        if (data.agent_output) {
-          this._normalizeContentUrls(data.agent_output);
-        }
-        
-        return data as SessionStatusResponse;
+
+        const data = await response.json(); // Expects format similar to WS agent_response data
+
+        // Format the HTTP response to match ProcessInputResponse
+        const relevantAgentData = data.next_step ? data.next_step : data; // Use next_step if available, otherwise the main data
+
+        const inputResponse: ProcessInputResponse = {
+            session_id: targetSessionId,
+            agent_output: {
+                text: relevantAgentData.text || "",
+                image_url: relevantAgentData.image_url,
+                audio_url: relevantAgentData.audio_url,
+                prompt_for_answer: relevantAgentData.waiting_for_input ?? relevantAgentData.state_metadata?.waiting_for_input ?? false,
+                evaluation: relevantAgentData.evaluation_type || relevantAgentData.last_evaluation || null,
+                is_final_step: relevantAgentData.is_final_step || false,
+            },
+            mastery_level: relevantAgentData.state_metadata?.mastery ?? 0,
+        };
+
+        this._normalizeContentUrls(inputResponse.agent_output);
+        this.processingRequest = false;
+        return inputResponse;
+
+      } catch (error) {
+        this.processingRequest = false;
+        console.error("HTTP fallback for processInput failed:", error);
+        throw error;
       }
-    } catch (error) {
-      console.error('Error obteniendo estado de sesión:', error);
-      throw error;
     }
   }
-  
+
+
   /**
-   * End an active session
+   * Get the current status of a session via WebSocket (preferred) or HTTP fallback.
+   */
+  async getSessionStatus(
+    sessionId: string | null = null
+  ): Promise<SessionStatusResponse> {
+    const targetSessionId = sessionId || this.currentSessionId;
+    if (!targetSessionId) {
+        throw new Error("No active session ID available for getSessionStatus.");
+    }
+
+    // Prefer WebSocket
+    if (this.isWebSocketConnected()) {
+        console.log(`Requesting session status via WebSocket for ${targetSessionId}`);
+        return new Promise<SessionStatusResponse>((resolve, reject) => {
+            const requestId = uuidv4();
+            const timeoutHandle = setTimeout(() => {
+                if (this.messageCallbacks.has(requestId)) {
+                    this.messageCallbacks.delete(requestId);
+                    console.error(`Timeout waiting for status response ${requestId}`);
+                    reject(new Error("Tiempo de espera agotado para obtener estado de sesión."));
+                }
+            }, 10000); // 10 seconds timeout
+
+            this.messageCallbacks.set(requestId, (response) => {
+                clearTimeout(timeoutHandle);
+                this.messageCallbacks.delete(requestId);
+                console.log(`Received WS status response for request ${requestId}:`, response);
+                if (response.type === "error") {
+                    reject(new Error(response.message || "Error obteniendo estado de sesión desde el servidor."));
+                } else if (response.type === "state_update") {
+                    // The backend sends the full serialized state in response.data
+                    const stateData = response.data;
+                    // We might need to format this if the SessionStatusResponse type differs significantly
+                    const statusResponse: SessionStatusResponse = {
+                         session_id: stateData.session_id,
+                         current_topic: stateData.current_topic,
+                         mastery_levels: stateData.topic_mastery || {}, // Ensure it's an object
+                         current_cpa_phase: stateData.current_cpa_phase,
+                         is_active: true, // Assume active if we get state
+                         content_ready: !stateData.waiting_for_input, // Example logic
+                         // agent_output: undefined, // Status usually doesn't include latest output
+                         error: undefined,
+                         created_at: Date.parse(stateData.created_at), // Convert ISO string to timestamp number
+                         last_updated: Date.parse(stateData.updated_at) // Convert ISO string to timestamp number
+                    }
+                    resolve(statusResponse);
+                } else {
+                    console.warn("Received unexpected message type for status request:", response.type);
+                    reject(new Error(`Tipo de respuesta inesperado del servidor: ${response.type}`));
+                }
+            });
+
+            this.wsConnection?.send(JSON.stringify({ action: "get_state", requestId }));
+        });
+    } else {
+      // Fallback to HTTP
+      console.warn(`WebSocket not connected for session ${targetSessionId}. Using HTTP fallback for getSessionStatus.`);
+      try {
+        const response = await fetch(
+          `${this.baseUrl}/api/sessions/${targetSessionId}`,
+          { method: "GET", headers: this.headers }
+        );
+
+        if (!response.ok) {
+          let errorDetail = "Error obteniendo estado de sesión vía HTTP";
+          try {
+              const errorData = await response.json();
+               errorDetail = errorData.detail || errorDetail;
+          } catch(e) { /* Ignore */ }
+          // If session not found via HTTP, clear the local storage
+          if (response.status === 404) {
+               console.log(`Session ${targetSessionId} not found via HTTP, clearing local storage.`);
+               this._clearSession();
+               this.currentSessionId = null;
+          }
+          throw new Error(errorDetail);
+        }
+
+        const stateData = await response.json(); // Expects full serialized state
+
+        const statusResponse: SessionStatusResponse = {
+             session_id: stateData.session_id,
+             current_topic: stateData.current_topic,
+             mastery_levels: stateData.topic_mastery || {},
+             current_cpa_phase: stateData.current_cpa_phase,
+             is_active: true,
+             content_ready: !stateData.waiting_for_input,
+             error: undefined,
+             created_at: Date.parse(stateData.created_at),
+             last_updated: Date.parse(stateData.updated_at)
+        }
+
+        return statusResponse;
+
+      } catch (error) {
+        console.error("HTTP fallback for getSessionStatus failed:", error);
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * End an active session. Prefers closing WebSocket first.
+   * Note: The backend currently doesn't have an explicit "end session" endpoint.
+   * We will close the WebSocket and clear local state. The backend session
+   * will eventually be cleaned up by the inactivity task.
    */
   async endSession(sessionId: string | null = null): Promise<boolean> {
     const targetSessionId = sessionId || this.currentSessionId;
-    
+    console.log(`Attempting to end session: ${targetSessionId}`);
+
     if (!targetSessionId) {
-      console.warn('No hay una sesión activa para finalizar.');
+      console.warn("No active session ID to end.");
       return false;
     }
-    
-    try {
-      // Close WebSocket connection if connected
-      if (this.wsConnection) {
-        this.wsConnection.close();
-        this.wsConnection = null;
-      }
-      
-      // Make HTTP request to end session
-      const response = await fetch(`${this.baseUrl}/api/sessions/${targetSessionId}/reset`, {
-        method: 'POST',
-        headers: this.headers,
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Error finalizando sesión');
-      }
-      
-      if (targetSessionId === this.currentSessionId) {
-        this.currentSessionId = null;
-        this._clearSession();
-      }
-      
-      return true;
-    } catch (error) {
-      console.error('Error finalizando sesión:', error);
-      
-      // Even if there's an error, clean up the local session
-      if (targetSessionId === this.currentSessionId) {
-        this.currentSessionId = null;
-        this._clearSession();
-      }
-      
-      throw error;
+
+    // Clear any pending reconnection timers
+    if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
     }
+
+    // Prevent future reconnections for this client instance
+    this.maxReconnectAttempts = 0;
+
+    // Close the WebSocket connection if it exists and is open/connecting
+    if (this.wsConnection && (this.wsConnection.readyState === WebSocket.OPEN || this.wsConnection.readyState === WebSocket.CONNECTING)) {
+      console.log(`Closing WebSocket connection for session ${targetSessionId}.`);
+      this.wsConnection.close(1000, "Client ending session"); // Send standard close code
+    }
+    this.wsConnection = null;
+
+
+    // Clear local session state *immediately* regardless of backend
+    if (targetSessionId === this.currentSessionId) {
+        this.currentSessionId = null;
+        this._clearSession(); // Clear from localStorage
+        console.log(`Cleared local session state for ${targetSessionId}.`);
+    }
+
+    // Note: No explicit backend call to end/delete the session is made here,
+    // relying on the backend's inactivity cleanup. If an explicit endpoint existed,
+    // we would call it here (e.g., DELETE /api/sessions/{targetSessionId})
+
+    return true; // Indicate local cleanup was successful
   }
-  
+
   /**
-   * Format diagnostic results for the backend API
+   * Format diagnostic results for potential future use (currently not sent in startSession)
    */
-  formatDiagnosticResults(diagnosticResults: DiagnosticQuestionResult[]): DiagnosticResults | null {
-    if (!diagnosticResults || !Array.isArray(diagnosticResults)) {
+  formatDiagnosticResults(
+    diagnosticResults: DiagnosticQuestionResult[]
+  ): DiagnosticResults | null {
+     if (!diagnosticResults || !Array.isArray(diagnosticResults) || diagnosticResults.length === 0) {
       return null;
     }
-    
+
     const correctAnswers = diagnosticResults.filter(r => r.correct).length;
     const totalQuestions = diagnosticResults.length;
     const percentCorrect = (correctAnswers / totalQuestions) * 100;
-    
-    let recommendedLevel = "initial";
+
+    let recommendedLevel = "initial"; // Default
     if (percentCorrect >= 80) recommendedLevel = "advanced";
     else if (percentCorrect >= 50) recommendedLevel = "intermediate";
     else if (percentCorrect >= 30) recommendedLevel = "beginner";
-    
+
+
     return {
       score: percentCorrect,
       correct_answers: correctAnswers,
       total_questions: totalQuestions,
       recommended_level: recommendedLevel,
-      question_results: diagnosticResults
+      question_results: diagnosticResults // Include original results
     };
   }
-  
-  /**
-   * Register a global message handler
+
+   /**
+   * Register a global message handler for broadcast/push messages from the server.
    */
   addMessageHandler(handler: (data: any) => void): void {
     if (typeof handler === 'function' && !this.messageHandlers.includes(handler)) {
       this.messageHandlers.push(handler);
+      console.log("Added message handler.");
     }
   }
-  
+
   /**
-   * Remove a message handler
+   * Remove a registered message handler.
    */
   removeMessageHandler(handler: (data: any) => void): void {
     const index = this.messageHandlers.indexOf(handler);
     if (index !== -1) {
       this.messageHandlers.splice(index, 1);
+      console.log("Removed message handler.");
     }
   }
-  
+
   /**
-   * Connect to a session's WebSocket
+   * Establishes the persistent WebSocket connection for the current session ID.
+   * Handles connection logic, message routing, and reconnection.
    */
   private _connectToSessionWebSocket(): void {
     if (!this.currentSessionId) {
-      console.warn('No hay ID de sesión para conectar');
+      console.error("Cannot connect to session WebSocket without a currentSessionId.");
       return;
     }
-    
-    // Clear any existing connection
-    if (this.wsConnection) {
-      this.wsConnection.close();
+    if (this.wsConnection && this.wsConnection.readyState === WebSocket.OPEN) {
+      console.log(`Already connected to session ${this.currentSessionId}.`);
+      return;
     }
-    
-    // Reset reconnection attempts
-    this.reconnectAttempts = 0;
-    
-    // Connect to the session WebSocket
-    const ws = new WebSocket(`${this.wsBaseUrl}/ws/session/${this.currentSessionId}`);
-    
-    ws.onopen = () => {
-      console.log(`WebSocket conectado a la sesión ${this.currentSessionId}`);
-      this.wsConnection = ws;
-      this.reconnectAttempts = 0;
-      
-      // Clear any reconnection timer
-      if (this.reconnectTimer) {
-        clearTimeout(this.reconnectTimer);
-        this.reconnectTimer = null;
-      }
-    };
-    
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        console.log("Mensaje WebSocket de la sesión:", data);
-        
-        // Check if it's a response to a specific request
-        if (data.requestId && this.messageCallbacks.has(data.requestId)) {
-          const callback = this.messageCallbacks.get(data.requestId);
-          if (callback) {
-            callback(data);
-          }
-        } else {
-          // Handle other types of messages
-          // Notify all registered handlers
-          this.messageHandlers.forEach(handler => {
-            try {
-              handler(data);
-            } catch (handlerError) {
-              console.error("Error en manejador de mensajes:", handlerError);
-            }
-          });
-        }
-      } catch (error) {
-        console.error("Error procesando mensaje WebSocket:", error);
-      }
-    };
-    
-    ws.onerror = (event) => {
-      console.error("Error de WebSocket:", event);
-    };
-    
-    ws.onclose = (event) => {
-      console.log(`Conexión WebSocket cerrada: ${event.code} - ${event.reason}`);
-      this.wsConnection = null;
-      
-      // Try to reconnect if necessary
-      if (this.reconnectAttempts < this.maxReconnectAttempts) {
-        this.reconnectAttempts++;
-        const delay = this.reconnectTimeout * Math.pow(1.5, this.reconnectAttempts - 1);
-        
-        console.log(`Reconectando en ${delay}ms (intento ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
-        
-        this.reconnectTimer = setTimeout(() => {
-          if (this.currentSessionId) {
-            this._connectToSessionWebSocket();
-          }
-        }, delay);
-      } else {
-        console.warn(`Intentos máximos de reconexión (${this.maxReconnectAttempts}) alcanzados`);
-      }
-    };
-  }
-  
-  /**
-   * Get the current session ID
-   */
-  getCurrentSessionId(): string | null {
-    return this.currentSessionId;
-  }
-  
-  /**
-   * Set the current session ID manually
-   */
-  setCurrentSessionId(sessionId: string): void {
-    this.currentSessionId = sessionId;
-    this._saveSession();
-    
-    // Connect to the session WebSocket
-    this._connectToSessionWebSocket();
-  }
-  
-  /**
-   * Check if there is an active session
-   */
-  hasActiveSession(): boolean {
-    return this.currentSessionId !== null;
-  }
-  
-  /**
-   * Check if the WebSocket is connected
-   */
-  isWebSocketConnected(): boolean {
-    return this.wsConnection !== null && this.wsConnection.readyState === WebSocket.OPEN;
-  }
-  
-  /**
-   * Normalize relative URLs in agent output to absolute URLs
-   */
-  private _normalizeContentUrls(agentOutput: AgentOutput): void {
-    if (!agentOutput) return;
-    
+     if (this.wsConnection && this.wsConnection.readyState === WebSocket.CONNECTING) {
+      console.log(`Connection attempt already in progress for session ${this.currentSessionId}.`);
+      return;
+    }
+
+
+    const sessionWsUrl = `${this.wsBaseUrl}/ws/session/${this.currentSessionId}`;
+    console.log(`Attempting to connect to WebSocket: ${sessionWsUrl}`);
+
+    // Reset reconnect attempts if starting a fresh connection sequence
+    // this.reconnectAttempts = 0; // Reset moved to successful open
+
     try {
-      if (agentOutput.image_url && typeof agentOutput.image_url === 'string' && agentOutput.image_url.startsWith('/')) {
-        agentOutput.image_url = `${this.baseUrl}${agentOutput.image_url}`;
+        const ws = new WebSocket(sessionWsUrl);
+        this.wsConnection = ws; // Assign immediately to prevent race conditions
+
+        ws.onopen = () => {
+          console.log(`WebSocket connection established for session ${this.currentSessionId}`);
+          this.reconnectAttempts = 0; // Reset counter on successful connection
+          // Clear any pending reconnect timer
+           if (this.reconnectTimer) {
+               clearTimeout(this.reconnectTimer);
+               this.reconnectTimer = null;
+           }
+           // Optional: Send a ping or get_state on connect to verify
+           // ws.send(JSON.stringify({ action: "get_state", requestId: uuidv4() }));
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data as string);
+            // console.log("Received message on session WebSocket:", data); // Can be verbose
+
+            // --- Message Routing ---
+            // 1. Check if it's a response to a specific request via requestId
+            if (data.requestId && this.messageCallbacks.has(data.requestId)) {
+              const callback = this.messageCallbacks.get(data.requestId);
+              // console.log(`Routing message with requestId ${data.requestId} to callback.`);
+              callback?.(data); // Execute the specific callback
+              // Callback should delete itself from the map: this.messageCallbacks.delete(data.requestId);
+            }
+            // 2. If not a specific response, treat as a push/broadcast message
+            else {
+              // console.log("Routing message as broadcast/push to general handlers.");
+              this.messageHandlers.forEach((handler) => {
+                try {
+                  handler(data); // Notify all general handlers
+                } catch (handlerError) {
+                  console.error("Error executing general message handler:", handlerError);
+                }
+              });
+            }
+          } catch (error) {
+            console.error("Error parsing message on session WebSocket:", error);
+          }
+        };
+
+        ws.onerror = (event) => {
+          console.error(`WebSocket error on session ${this.currentSessionId}:`, event);
+          // The onclose event will handle reconnection logic
+        };
+
+        ws.onclose = (event) => {
+          console.log(
+            `Session WebSocket closed for ${this.currentSessionId}. Code: ${event.code}, Reason: '${event.reason}', Clean: ${event.wasClean}`
+          );
+
+          // Clear the reference if this specific socket closed
+          if (this.wsConnection === ws) {
+               this.wsConnection = null;
+          }
+
+
+          // --- Reconnection Logic ---
+          // Don't attempt to reconnect if the close was initiated intentionally (code 1000)
+          // or if max attempts reached, or if no session ID exists anymore
+          if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts && this.currentSessionId) {
+            this.reconnectAttempts++;
+            // Exponential backoff
+            const delay = this.reconnectTimeout * Math.pow(1.5, this.reconnectAttempts - 1);
+            console.log(
+              `Attempting WebSocket reconnection in ${Math.round(delay)}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`
+            );
+
+            // Clear previous timer if any
+             if (this.reconnectTimer) {
+               clearTimeout(this.reconnectTimer);
+             }
+
+
+            this.reconnectTimer = setTimeout(() => {
+                // Double-check we still have a session ID before reconnecting
+                if (this.currentSessionId) {
+                    console.log("Executing reconnect attempt...");
+                    this._connectToSessionWebSocket(); // Try connecting again
+                } else {
+                     console.log("Session ID cleared, aborting reconnect attempt.");
+                }
+            }, delay);
+
+          } else if (event.code === 1000) {
+               console.log("WebSocket closed normally by client or server.");
+          } else if (!this.currentSessionId){
+               console.log("No current session ID, stopping reconnection attempts.");
+          } else {
+            console.warn(
+              `Max WebSocket reconnection attempts (${this.maxReconnectAttempts}) reached for session ${this.currentSessionId}. Giving up.`
+            );
+            // Consider notifying the user state (e.g., via a message handler)
+             this.messageHandlers.forEach(h => h({ type: 'connection_error', message: 'Connection lost permanently.'}));
+          }
+        };
+      } catch (error) {
+            console.error("Failed to create WebSocket for session connection:", error);
+            // Maybe schedule a reconnect attempt here too?
       }
-      
-      if (agentOutput.audio_url && typeof agentOutput.audio_url === 'string' && agentOutput.audio_url.startsWith('/')) {
-        agentOutput.audio_url = `${this.baseUrl}${agentOutput.audio_url}`;
-      }
-    } catch (error) {
-      console.warn('Error normalizando URLs de contenido:', error);
-    }
   }
-  
+
+
+  // --- Session Persistence ---
+
   /**
-   * Map learning path to initial topic
-   */
-  private _mapLearningPathToTopic(learningPath: string): string {
-    const pathToTopic: Record<string, string> = {
-      'fractions': 'fractions_introduction',
-      'addition': 'addition_introduction',
-      'subtraction': 'subtraction_introduction',
-      'multiplication': 'multiplication_introduction',
-      'division': 'division_introduction'
-    };
-    
-    return pathToTopic[learningPath] || 'fractions_introduction';
-  }
-  
-  /**
-   * Save session to localStorage
+   * Save current session ID and timestamp to localStorage.
    */
   private _saveSession(): void {
-    if (typeof window !== 'undefined' && this.currentSessionId) {
+    if (typeof window !== "undefined" && this.currentSessionId) {
       try {
-        localStorage.setItem('mathTutorSessionId', this.currentSessionId);
-        localStorage.setItem('mathTutorSessionTimestamp', Date.now().toString());
+        localStorage.setItem("mathTutorSessionId", this.currentSessionId);
+        localStorage.setItem("mathTutorSessionTimestamp", Date.now().toString());
+        // console.log(`Saved session ${this.currentSessionId} to localStorage.`);
       } catch (e) {
-        console.warn('No se pudo guardar la sesión en localStorage', e);
+        console.warn("Could not save session to localStorage", e);
       }
     }
   }
-  
+
   /**
-   * Restore session from localStorage
+   * Restore session ID from localStorage if valid and not expired.
+   * **Does not automatically connect anymore.**
    */
   private _restoreSession(): void {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== "undefined") {
       try {
-        const savedSessionId = localStorage.getItem('mathTutorSessionId');
-        const sessionTimestamp = localStorage.getItem('mathTutorSessionTimestamp');
-        
-        // Only restore if session is less than 1 hour old
-        const SESSION_MAX_AGE = 60 * 60 * 1000; // 1 hour in milliseconds
-        const isSessionExpired = sessionTimestamp && 
-          (Date.now() - parseInt(sessionTimestamp)) > SESSION_MAX_AGE;
-          
+        const savedSessionId = localStorage.getItem("mathTutorSessionId");
+        const sessionTimestamp = localStorage.getItem("mathTutorSessionTimestamp");
+
+        // Session expiry check (e.g., 1 hour)
+        const SESSION_MAX_AGE = 60 * 60 * 1000; // 1 hour in ms
+        const isSessionExpired = sessionTimestamp
+          ? Date.now() - parseInt(sessionTimestamp, 10) > SESSION_MAX_AGE
+          : true; // Treat as expired if no timestamp
+
         if (savedSessionId && !isSessionExpired) {
-          console.log(`Restaurando sesión: ${savedSessionId}`);
+          console.log(`Restoring session ID from localStorage: ${savedSessionId}`);
           this.currentSessionId = savedSessionId;
-          
-          // Connect to the session WebSocket
-          this._connectToSessionWebSocket();
-        } else if (isSessionExpired) {
-          console.log('Sesión expirada, limpiando');
-          this._clearSession();
+          // **REMOVED**: this._connectToSessionWebSocket();
+          // Connection will now happen only when explicitly started or potentially verified
+        } else {
+          if (savedSessionId) { // Only log/clear if there *was* an ID
+             console.log(`Stored session ${savedSessionId} is expired or invalid. Clearing.`);
+             this._clearSession();
+          }
         }
       } catch (e) {
-        console.warn('No se pudo restaurar la sesión desde localStorage', e);
-        this._clearSession();
+        console.warn("Could not restore session from localStorage", e);
+        this._clearSession(); // Clear if error during restore
       }
     }
   }
-  
+
   /**
-   * Clear session from localStorage
+   * Clear session ID and timestamp from localStorage.
    */
   private _clearSession(): void {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== "undefined") {
       try {
-        localStorage.removeItem('mathTutorSessionId');
-        localStorage.removeItem('mathTutorSessionTimestamp');
+        localStorage.removeItem("mathTutorSessionId");
+        localStorage.removeItem("mathTutorSessionTimestamp");
+        // console.log("Cleared session from localStorage.");
       } catch (e) {
-        console.warn('No se pudo limpiar la sesión de localStorage', e);
+        console.warn("Could not clear session from localStorage", e);
       }
     }
   }
+
+
+  // --- Utility Methods ---
+
+  /**
+   * Checks if the WebSocket connection is currently open.
+   */
+  isWebSocketConnected(): boolean {
+    return this.wsConnection?.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * Normalize relative URLs in agent output to absolute URLs based on the API base URL.
+   */
+  private _normalizeContentUrls(agentOutput: AgentOutput | null): void {
+    if (!agentOutput) return;
+    try {
+        const makeAbsolute = (url: string | null | undefined): string | null | undefined => {
+            if (url && typeof url === 'string' && url.startsWith('/')) {
+                // Ensure no double slashes if baseUrl already ends with one
+                const base = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
+                return `${base}${url}`;
+            }
+            return url;
+        };
+
+        agentOutput.image_url = makeAbsolute(agentOutput.image_url);
+        agentOutput.audio_url = makeAbsolute(agentOutput.audio_url);
+
+    } catch (error) {
+      console.warn("Failed to normalize content URLs:", error);
+    }
+  }
+
+  /**
+   * Map a user-friendly learning path name to the backend's initial topic ID.
+   */
+  private _mapLearningPathToTopic(learningPath: string): string {
+    const path = learningPath?.toLowerCase().trim() || 'fractions'; // Default to fractions
+    const map: Record<string, string> = {
+      fractions: "fractions_introduction",
+      addition: "addition_introduction",
+      subtraction: "subtraction_introduction",
+      multiplication: "multiplication_introduction",
+      division: "division_introduction",
+      // Add more mappings as needed
+    };
+    return map[path] || "fractions_introduction"; // Default if path not found
+  }
+
+  // Helper for generating unique IDs (consider using a library like uuid)
 }
+
+// Simple UUID v4 generator if needed (use a library for production)
+function uuidv4(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
 
 export default MathTutorClient;

@@ -1,9 +1,10 @@
+// FILE: frontend/math-journey/contexts/TutorProvider.tsx
 "use client";
 
-import React, { JSX, createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { useMathTutor } from "@/hooks/use-math-tutor";
+import React, { JSX, createContext, useContext, useState, useEffect, ReactNode, useCallback } from "react"; // Added useCallback
+import { useMathTutor } from "@/hooks/use-math-tutor"; // Adjust path if needed
 
-// Definición de la interfaz AgentOutput que refleja la estructura real que recibimos
+// Define interfaces directly or import from a shared types file
 interface AgentOutput {
   text?: string;
   image_url?: string | null;
@@ -13,11 +14,10 @@ interface AgentOutput {
   is_final_step?: boolean;
 }
 
-// Definiciones de tipos
 export enum MessageType {
   SYSTEM = "system",
   USER = "user",
-  ASSISTANT = "assistant"
+  ASSISTANT = "assistant",
 }
 
 export interface MessageOptions {
@@ -40,14 +40,15 @@ export interface Message {
   isCorrect?: boolean;
 }
 
+// Interface for options when starting a session *from a component*
 export interface StartSessionOptions {
   theme?: string;
   learningPath?: string;
-  initialMessage?: string;
-  diagnosticResults?: any[];
+  initialMessage?: string; // Keep for displaying initial user message in UI
+  diagnosticResults?: any[]; // Type appropriately if possible
 }
 
-// Interfaz del contexto
+// Interface defining the context's value
 interface TutorContextType {
   messages: Message[];
   isLoading: boolean;
@@ -56,18 +57,17 @@ interface TutorContextType {
   masteryLevel: number;
   isConnected: boolean;
   error?: Error | null;
-  
+
   startSession: (options: StartSessionOptions) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
+  requestContinue: () => Promise<void>; // Function exposed by the context
   endSession: () => Promise<void>;
   clearMessages: () => void;
   prepareForUnmount: () => void;
 }
 
-// Crear el contexto con un valor inicial de undefined
 const TutorContext = createContext<TutorContextType | undefined>(undefined);
 
-// Generar ID único para mensajes
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
 interface TutorProviderProps {
@@ -76,7 +76,8 @@ interface TutorProviderProps {
 
 export function TutorProvider({ children }: TutorProviderProps): JSX.Element {
   const [messages, setMessages] = useState<Message[]>([]);
-  
+
+  // Get functions and state from the underlying hook
   const {
     sessionId,
     agentOutput,
@@ -84,98 +85,120 @@ export function TutorProvider({ children }: TutorProviderProps): JSX.Element {
     masteryLevel,
     isConnected,
     error,
-    startSession: startTutorSession,
-    sendMessage: sendTutorMessage,
-    endSession: endTutorSession,
-    prepareForUnmount,
+    startSession: startTutorSession, // Renamed from hook
+    sendMessage: sendTutorMessage, // Renamed from hook
+    requestContinue: requestTutorContinue, // Renamed from hook
+    endSession: endTutorSession, // Renamed from hook
+    prepareForUnmount, // Pass through directly
   } = useMathTutor();
 
-  // Procesar nuevas salidas del agente con verificación de tipo explícita
+  // Effect to add assistant messages when agentOutput changes
   useEffect(() => {
-    // Asegurar que agentOutput sea tratado con el tipo correcto
-    if (agentOutput) {
-      const output = agentOutput as AgentOutput;
-      
-      if (output.text) {
-        addMessage(MessageType.ASSISTANT, output.text, {
-          imageUrl: output.image_url,
-          audioUrl: output.audio_url,
-          isEvaluation: output.evaluation ? true : false,
-          evaluationType: output.evaluation,
-          isCorrect: output.evaluation === "Correct"
-        });
+    if (agentOutput?.text) { // Check if agentOutput and text exist
+      // Check if the last message is already this exact message to prevent duplicates
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg?.type !== MessageType.ASSISTANT || lastMsg?.content !== agentOutput.text) {
+         addMessage(MessageType.ASSISTANT, agentOutput.text, {
+            imageUrl: agentOutput.image_url,
+            audioUrl: agentOutput.audio_url,
+            isEvaluation: !!agentOutput.evaluation,
+            evaluationType: agentOutput.evaluation,
+            isCorrect: agentOutput.evaluation === "Correct", // Assuming "Correct" string value
+         });
       }
     }
-  }, [agentOutput]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentOutput]); // Dependency: agentOutput
 
-  const addMessage = (type: MessageType, content: string, options: MessageOptions = {}): void => {
+  // Helper function to add messages to the local state
+  const addMessage = useCallback((type: MessageType, content: string, options: MessageOptions = {}): void => {
     const newMessage: Message = {
       id: generateId(),
       type,
       content,
       timestamp: new Date(),
-      ...options
+      ...options,
     };
-    
     setMessages((prev) => [...prev, newMessage]);
-  };
+  }, []); // No dependencies needed if it only uses generateId and setMessages
 
-  const startSession = async (options: StartSessionOptions = {}): Promise<void> => {
-    clearMessages();
-    
-    addMessage(MessageType.SYSTEM, "¡Bienvenido a tu sesión de aprendizaje! Estoy aquí para ayudarte.");
-    
+
+  // Context function to start a session
+  const startSession = useCallback(async (options: StartSessionOptions = {}): Promise<void> => {
+    setMessages([]); // Clear previous messages
+    addMessage(MessageType.SYSTEM, "Welcome to your learning session! I'm here to help.");
+
+    // Add the initial user message to the UI if provided
     if (options.initialMessage) {
       addMessage(MessageType.USER, options.initialMessage);
     }
-    
+
+    // Call the hook's start session function
     await startTutorSession({
+      // Map options from UI/component call to options expected by the hook
       personalized_theme: options.theme,
       learning_path: options.learningPath,
-      initial_message: options.initialMessage,
+      // initial_message: options.initialMessage, // REMOVED - Hook doesn't use it
       diagnostic_results: options.diagnosticResults,
     });
-  };
+  }, [addMessage, startTutorSession]); // Dependencies
 
-  const sendMessage = async (content: string): Promise<void> => {
-    addMessage(MessageType.USER, content);
-    
-    await sendTutorMessage(content);
-  };
 
-  const endSession = async (): Promise<void> => {
-    await endTutorSession();
-    clearMessages();
-  };
+  // Context function to send a user message
+  const sendMessage = useCallback(async (content: string): Promise<void> => {
+    addMessage(MessageType.USER, content); // Add user message to UI
+    await sendTutorMessage(content); // Call the hook's send message function
+  }, [addMessage, sendTutorMessage]); // Dependencies
 
-  const clearMessages = (): void => {
+
+  // Context function to request continuation
+  const requestContinue = useCallback(async (): Promise<void> => {
+    // Optional: Add a system message to indicate action?
+    // addMessage(MessageType.SYSTEM, "Continuing...");
+    // Call the hook's request continue function (CORRECTED NAME)
+    await requestTutorContinue();
+  }, [requestTutorContinue /*, addMessage */]); // Dependencies
+
+
+  // Context function to end the session
+  const endSession = useCallback(async (): Promise<void> => {
+    await endTutorSession(); // Call hook's end session function
+    setMessages([]); // Clear messages on session end
+     addMessage(MessageType.SYSTEM, "Session ended. See you next time!");
+  }, [endTutorSession, addMessage]); // Dependencies
+
+
+  // Context function to clear messages manually (if needed)
+  const clearMessages = useCallback((): void => {
     setMessages([]);
-  };
+  }, []); // No dependencies
 
+
+  // Create the context value object
   const value: TutorContextType = {
     messages,
     isLoading,
     sessionId,
-    currentOutput: agentOutput as AgentOutput | null,
+    currentOutput: agentOutput, // Pass agentOutput directly
     masteryLevel,
     isConnected,
     error,
     startSession,
     sendMessage,
+    requestContinue, // Expose the context's requestContinue function
     endSession,
     clearMessages,
-    prepareForUnmount
+    prepareForUnmount, // Pass through directly
   };
 
   return <TutorContext.Provider value={value}>{children}</TutorContext.Provider>;
 }
 
+// Hook to consume the context
 export function useTutor(): TutorContextType {
   const context = useContext(TutorContext);
-  
   if (context === undefined) {
-    throw new Error("useTutor debe ser usado dentro de un TutorProvider");
+    throw new Error("useTutor must be used within a TutorProvider");
   }
-  
   return context;
 }

@@ -33,3 +33,4 @@ Thumbs.db
 /backend_2/agents/__pycache__
 /backend_2/models/__pycache__
 /backend_2/data/__pycache__
+/backend_2/services/__pycache__

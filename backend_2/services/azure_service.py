@@ -461,7 +461,7 @@ def save_base64_image(b64_data: str, prompt: str) -> Optional[str]:
 
 # Constantes para Speech
 AUDIO_FORMAT = "audio-16khz-128kbitrate-mono-mp3"
-VOICE_NAME = "es-ES-ElviraNeural" # Voz en español por defecto
+VOICE_NAME = "en-US-Emma2:DragonHDLatestNeural"
 
 async def generate_speech(text: str, voice_name: str = VOICE_NAME) -> Optional[str]:
     """

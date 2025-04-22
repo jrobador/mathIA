@@ -116,13 +116,17 @@ async def present_theory(state: StudentState) -> Dict[str, Any]:
     try:
         # Construir ruta a la plantilla de teoría
         theory_template_path = os.path.join(PROMPTS_DIR, "theory.prompty")
-        
-        # Get CPA phase value - handle both enum and string
-        cpa_phase = state.current_cpa_phase
-        if hasattr(cpa_phase, 'value'):
-            cpa_phase_value = cpa_phase.value
+
+        # --- FIX: Safely get CPA phase string value ---
+        current_cpa_phase_value: str
+        if isinstance(state.current_cpa_phase, CPAPhase):
+            current_cpa_phase_value = state.current_cpa_phase.value
+        elif isinstance(state.current_cpa_phase, str):
+            current_cpa_phase_value = state.current_cpa_phase
         else:
-            cpa_phase_value = cpa_phase
+            print(f"Warning: Unexpected type for current_cpa_phase in present_theory: {type(state.current_cpa_phase)}. Defaulting.")
+            current_cpa_phase_value = CPAPhase.CONCRETE.value
+        # --- END FIX ---
             
         # Get personalized theme
         theme = state.personalized_theme
@@ -134,14 +138,14 @@ async def present_theory(state: StudentState) -> Dict[str, Any]:
                 theory_template_path,
                 topic_title=topic.title,
                 topic_description=topic.description,
-                cpa_phase=cpa_phase_value,
+                cpa_phase=current_cpa_phase_value,
                 theme=theme,
                 subtopics=", ".join(topic.subtopics)
             )
         else:
             # Fallback a prompt directo si no hay plantilla
             prompt = f"""Genera una explicación teórica sobre {topic.title} para un estudiante.
-            Fase: {cpa_phase_value}, Tema: {theme}.
+            Fase: {current_cpa_phase_value}, Tema: {theme}.
             Descripción del tema: {topic.description}
             Subtemas: {', '.join(topic.subtopics)}
             
@@ -151,7 +155,7 @@ async def present_theory(state: StudentState) -> Dict[str, Any]:
             theory_content = await invoke_llm(prompt, system_message)
         
         # Generar imagen y audio si es necesario
-        visual_needed = cpa_phase_value != CPAPhase.ABSTRACT.value
+        visual_needed = current_cpa_phase_value != CPAPhase.ABSTRACT.value
         image_url = None
         if visual_needed:
             img_prompt = f"Visualización educativa para el concepto matemático: {topic.title}, con tema {theme}, estilo claro y educativo para niños"
@@ -207,19 +211,29 @@ async def present_guided_practice(state: StudentState) -> Dict[str, Any]:
         return {"error": f"No se encontró el tema {topic_id} en el roadmap"}
     
     mastery = state.topic_mastery.get(topic_id, 0.1)
+
+    # --- FIX: Safely get CPA phase string value ---
+    current_cpa_phase_value: str
+    if isinstance(state.current_cpa_phase, CPAPhase):
+        current_cpa_phase_value = state.current_cpa_phase.value
+    elif isinstance(state.current_cpa_phase, str):
+        # Already a string, use it directly
+        current_cpa_phase_value = state.current_cpa_phase
+    else:
+        # Fallback or error if it's neither Enum nor string
+        print(f"Warning: Unexpected type for current_cpa_phase: {type(state.current_cpa_phase)}. Defaulting.")
+        current_cpa_phase_value = CPAPhase.CONCRETE.value # Default to Concrete
+    # --- END FIX ---
     
     try:
-        # Construir ruta a la plantilla de práctica guiada
         practice_template_path = os.path.join(PROMPTS_DIR, "guided_practice.prompty")
         
-        # Verificar si la plantilla existe
         if os.path.exists(practice_template_path):
-            # Usar plantilla Prompty para generar problema
             practice_content = await invoke_with_prompty(
                 practice_template_path,
                 topic_title=topic.title,
                 topic_description=topic.description,
-                cpa_phase=state.current_cpa_phase.value,
+                cpa_phase=current_cpa_phase_value,
                 theme=state.personalized_theme,
                 mastery_level=mastery,
                 subtopics=", ".join(topic.subtopics)
@@ -227,7 +241,7 @@ async def present_guided_practice(state: StudentState) -> Dict[str, Any]:
         else:
             # Fallback a prompt directo si no hay plantilla
             prompt = f"""Genera un problema de práctica GUIADA sobre {topic.title} para un estudiante.
-            Nivel de dominio actual: {mastery:.2f}, Fase: {state.current_cpa_phase.value}
+            Nivel de dominio actual: {mastery:.2f}, Fase: {current_cpa_phase_value}
             Tema de personalización: {state.personalized_theme}
             
             El problema debe incluir instrucciones paso a paso y pistas para ayudar al estudiante.
@@ -238,18 +252,13 @@ async def present_guided_practice(state: StudentState) -> Dict[str, Any]:
             practice_content = await invoke_llm(prompt, system_message)
         
         # Extraer la solución
-        solution_match = re.search(r"SOLUCIÓN:(.+?)$", practice_content, re.DOTALL | re.IGNORECASE)
+        solution_match = re.search(r"SOLUCIÓN:(.+?)$", practice_content, re.DOTALL | re.IGNORECASE | re.MULTILINE)
         if not solution_match:
-            solution_match = re.search(r"Solución:(.+?)$", practice_content, re.DOTALL | re.IGNORECASE)
+            solution_match = re.search(r"SOLUCIÓN:(.+?)$", practice_content, re.DOTALL | re.IGNORECASE | re.MULTILINE)
             
-        solution_text = solution_match.group(1).strip() if solution_match else "5" # Valor predeterminado
+        solution_text = solution_match.group(1).strip() if solution_match else "No Solution Found"
+        problem_text = practice_content.replace(solution_match.group(0), "").strip() if solution_match else practice_content.strip()
         
-        # Eliminar la solución del texto del problema para mostrar al estudiante
-        problem_text = practice_content
-        if solution_match:
-            problem_text = practice_content.replace(solution_match.group(0), "").strip()
-        
-        # Generar imagen y audio
         image_url = await generate_image(f"Problema matemático de {topic.title} con tema {state.personalized_theme}")
         audio_url = await generate_speech(problem_text)
         
@@ -259,7 +268,7 @@ async def present_guided_practice(state: StudentState) -> Dict[str, Any]:
             "solution": solution_text,
             "type": "guided_practice",
             "difficulty": 0.3, # Dificultad baja para práctica guiada
-            "mastery_value": 0.1, # Incremento de dominio si es correcto
+            "mastery_value": 0.3, # Incremento de dominio si es correcto
             "mastery_penalty": 0.05 # Decremento de dominio si es incorrecto
         }
         
@@ -311,6 +320,17 @@ async def present_independent_practice(state: StudentState) -> Dict[str, Any]:
         # Construir ruta a la plantilla de práctica independiente
         practice_template_path = os.path.join(PROMPTS_DIR, "independent_practice.prompty")
         
+        # --- FIX: Safely get CPA phase string value ---
+        current_cpa_phase_value: str
+        if isinstance(state.current_cpa_phase, CPAPhase):
+            current_cpa_phase_value = state.current_cpa_phase.value
+        elif isinstance(state.current_cpa_phase, str):
+            current_cpa_phase_value = state.current_cpa_phase
+        else:
+            print(f"Warning: Unexpected type for current_cpa_phase in present_independent_practice: {type(state.current_cpa_phase)}. Defaulting.")
+            current_cpa_phase_value = CPAPhase.ABSTRACT.value # Default maybe to Abstract for independent?
+        # --- END FIX ---
+
         # Verificar si la plantilla existe
         if os.path.exists(practice_template_path):
             # Usar plantilla Prompty para generar problema
@@ -318,7 +338,7 @@ async def present_independent_practice(state: StudentState) -> Dict[str, Any]:
                 practice_template_path,
                 topic_title=topic.title,
                 topic_description=topic.description,
-                cpa_phase=state.current_cpa_phase.value,
+                cpa_phase=current_cpa_phase_value,
                 theme=state.personalized_theme,
                 mastery_level=mastery,
                 subtopics=", ".join(topic.subtopics)
@@ -326,7 +346,7 @@ async def present_independent_practice(state: StudentState) -> Dict[str, Any]:
         else:
             # Fallback a prompt directo si no hay plantilla
             prompt = f"""Genera un problema de práctica INDEPENDIENTE sobre {topic.title} para un estudiante.
-            Nivel de dominio actual: {mastery:.2f}, Fase: {state.current_cpa_phase.value}
+            Nivel de dominio actual: {mastery:.2f}, Fase: {current_cpa_phase_value}
             Tema de personalización: {state.personalized_theme}
             
             El problema debe ser levemente más difícil que su nivel actual.
@@ -587,59 +607,108 @@ async def provide_targeted_feedback(state: StudentState) -> Dict[str, Any]:
 
 async def simplify_instruction(state: StudentState) -> Dict[str, Any]:
     """
-    Simplifica la instrucción o regresa a la teoría
+    Simplifica la instrucción o regresa a la teoría.
+    Handles potential string values for CPA phase and updates state correctly.
     """
     print(f"Ejecutando simplify_instruction para consecutive_incorrect={state.consecutive_incorrect}")
-    
+
+    # --- Safely get CPA phase string value ---
+    current_cpa_phase_value: str
+    original_cpa_phase = state.current_cpa_phase # Store original value/type
+
+    if isinstance(original_cpa_phase, CPAPhase):
+        current_cpa_phase_value = original_cpa_phase.value
+    elif isinstance(original_cpa_phase, str):
+        current_cpa_phase_value = original_cpa_phase
+        # Attempt to convert string back to Enum for consistency if needed later
+        try:
+            original_cpa_phase = CPAPhase(original_cpa_phase)
+        except ValueError:
+             print(f"Warning: Invalid string value for CPA phase in simplify_instruction: '{original_cpa_phase}'. Defaulting.")
+             original_cpa_phase = CPAPhase.CONCRETE # Default to Enum member
+             current_cpa_phase_value = original_cpa_phase.value
+    else:
+        # Fallback if it's neither Enum nor string
+        print(f"Warning: Unexpected type for current_cpa_phase in simplify_instruction: {type(original_cpa_phase)}. Defaulting.")
+        original_cpa_phase = CPAPhase.CONCRETE # Default Enum member
+        current_cpa_phase_value = original_cpa_phase.value
+    # --- END Safe Get ---
+
     # Si hay muchos errores consecutivos, volver a la teoría
     if state.consecutive_incorrect >= 5:
         # Forzar a mostrar teoría nuevamente
         if state.current_topic in state.theory_presented_for_topics:
-            state.theory_presented_for_topics.remove(state.current_topic)
-        
-        # Retroceder fase CPA si es posible
-        if state.current_cpa_phase == CPAPhase.ABSTRACT:
-            state.current_cpa_phase = CPAPhase.PICTORIAL
-        elif state.current_cpa_phase == CPAPhase.PICTORIAL:
-            state.current_cpa_phase = CPAPhase.CONCRETE
-        
-        state.last_action_type = "simplify_instruction"
-        state.waiting_for_input = False
-        
-        message = "Vamos a revisar nuevamente la teoría para reforzar los conceptos."
+            try:
+                state.theory_presented_for_topics.remove(state.current_topic)
+                print(f"Removed theory presentation flag for topic {state.current_topic}")
+            except ValueError:
+                pass # Ignore if somehow already removed
+
+        # Retroceder fase CPA si es posible, comparing using the safe string value
+        new_cpa_phase_enum = original_cpa_phase # Start with the (potentially converted) Enum type
+
+        if current_cpa_phase_value == CPAPhase.ABSTRACT.value:
+            new_cpa_phase_enum = CPAPhase.PICTORIAL
+            print("Stepping back CPA phase from Abstract to Pictorial")
+        elif current_cpa_phase_value == CPAPhase.PICTORIAL.value:
+            new_cpa_phase_enum = CPAPhase.CONCRETE
+            print("Stepping back CPA phase from Pictorial to Concrete")
+        else:
+             print("Already at Concrete phase, cannot step back further.")
+
+
+        # Store the correct Enum member back into the state
+        state.current_cpa_phase = new_cpa_phase_enum
+
+        # Update state variables
+        state.last_action_type = "simplify_instruction_theory" # More specific action type
+        state.waiting_for_input = False # Next step will likely be present_theory
+        state.consecutive_incorrect = 0 # Reset counter after intervention
+
+        message = "Parece que estamos teniendo dificultades. Vamos a revisar la teoría de nuevo para asegurarnos de que los conceptos estén claros."
         add_message(state, "ai", message)
-        
         audio_url = await generate_speech(message)
-        
+
         return {
-            "action": "present_content",
+            "action": "present_content", # Signal presentation
             "content_type": "system_message",
             "text": message,
             "audio_url": audio_url,
-            "requires_input": False
+            "requires_input": False, # Let backend determine next step
+             # Optionally include info about phase change for frontend?
+             "cpa_phase_changed_to": state.current_cpa_phase.value
         }
-    
+
     # Simplificar la instrucción presentando un problema más sencillo
     else:
         # Reducir el nivel de maestría para obtener problemas más fáciles
         old_mastery = state.topic_mastery.get(state.current_topic, 0.1)
-        reduced_mastery = max(0.1, old_mastery - 0.2)
+        # More significant reduction when simplifying
+        reduced_mastery = max(0.05, old_mastery * 0.7) # Reduce by 30%, floor at 0.05
         state.topic_mastery[state.current_topic] = reduced_mastery
-        
-        state.last_action_type = "simplify_instruction"
-        state.waiting_for_input = False
-        
-        message = "Vamos a intentar con algunos ejercicios más sencillos para fortalecer las bases."
+        print(f"Reduced mastery for {state.current_topic} from {old_mastery:.2f} to {reduced_mastery:.2f}")
+
+        # Optionally step back CPA phase here too? For now, just reduce mastery.
+        # if current_cpa_phase_value == CPAPhase.ABSTRACT.value:
+        #     state.current_cpa_phase = CPAPhase.PICTORIAL
+        # elif current_cpa_phase_value == CPAPhase.PICTORIAL.value:
+        #     state.current_cpa_phase = CPAPhase.CONCRETE
+
+        # Update state variables
+        state.last_action_type = "simplify_instruction_easier" # More specific action type
+        state.waiting_for_input = False # Next step will likely be present_practice
+        # Don't reset consecutive_incorrect here, wait for a correct answer
+
+        message = "¡No te preocupes! Vamos a intentar con un ejercicio un poco más sencillo para practicar."
         add_message(state, "ai", message)
-        
         audio_url = await generate_speech(message)
-        
+
         return {
-            "action": "present_content",
+            "action": "present_content", # Signal presentation
             "content_type": "system_message",
             "text": message,
             "audio_url": audio_url,
-            "requires_input": False
+            "requires_input": False # Let backend determine next step
         }
 
 async def check_advance_topic(state: StudentState) -> Dict[str, Any]:

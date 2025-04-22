@@ -1,257 +1,381 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
-from typing import Dict, Any
+# backend_2/api/ws_routes.py
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from typing import Dict, Any, List, Optional # Import Optional
 import json
 import uuid
+import traceback # Import traceback for detailed error logging
+
+# Import the agent class
+from agents.learning_agent import AdaptiveLearningAgent
 
 router = APIRouter()
 
-# Almacenamiento de conexiones activas
+# Almacenamiento de conexiones activas (mantener aquí por ahora)
+# Consider moving to a more robust connection manager for production scaling
 active_connections: Dict[str, Dict[str, WebSocket]] = {}
 
-@router.websocket("/ws/session/{session_id}")
-async def websocket_session_endpoint(websocket: WebSocket, session_id: str, request: Request):
+# Helper to send JSON data safely, catching potential connection errors
+async def send_json_to_websocket(websocket: WebSocket, data: Any):
+    """Helper to send JSON data safely."""
+    try:
+        if websocket.client_state == websocket.client_state.CONNECTED:
+            await websocket.send_json(data)
+        else:
+            print(f"Attempted to send to disconnected WebSocket: {websocket.client.host}:{websocket.client.port}")
+    except Exception as e:
+        # Log specific connection errors if possible, but avoid crashing the server
+        print(f"Error sending message to WebSocket ({websocket.client.host}:{websocket.client.port}): {e}")
+        # Consider removing the connection from active_connections here if send fails repeatedly
+
+# Helper to send agent responses, including requestId
+async def send_agent_responses(websocket: WebSocket, responses: List[Dict[str, Any]], request_id: Optional[str] = None):
     """
-    Endpoint WebSocket para una sesión específica
+    Sends a list of agent responses to the WebSocket client.
+    Includes the original requestId if provided.
+    """
+    if not responses:
+        print(f"No agent responses to send back (requestId: {request_id}).")
+        return
+
+    print(f"Sending {len(responses)} agent response(s) back (requestId: {request_id})...")
+    for i, response_data in enumerate(responses):
+        # Basic validation of response_data format
+        if not isinstance(response_data, dict):
+            print(f"Warning: Agent response item {i} is not a dict: {type(response_data)}. Skipping.")
+            continue
+
+        payload = {
+            "type": "agent_response",
+            "data": response_data # The actual content from the agent step
+        }
+        # Include requestId in the payload if it exists
+        if request_id:
+            payload["requestId"] = request_id
+
+        await send_json_to_websocket(websocket, payload)
+
+# Endpoint for handling active learning sessions
+@router.websocket("/ws/session/{session_id}")
+async def websocket_session_endpoint(websocket: WebSocket, session_id: str):
+    """
+    Endpoint WebSocket para una sesión específica. Gestiona la comunicación bidireccional.
     """
     await websocket.accept()
-    
-    # Obtener el agente de aprendizaje
-    learning_agent = request.app.state.learning_agent
-    
-    # Generar ID de conexión único
     connection_id = str(uuid.uuid4())
-    
-    # Verificar si la sesión existe
-    session_state = learning_agent.get_session_state(session_id)
-    if not session_state:
-        await websocket.send_json({
+    learning_agent: Optional[AdaptiveLearningAgent] = None
+
+    # Access the agent instance via the websocket object safely
+    try:
+        learning_agent = websocket.app.state.learning_agent
+        if not isinstance(learning_agent, AdaptiveLearningAgent):
+             raise AttributeError("learning_agent in app.state is not the correct type.")
+    except AttributeError:
+         print("FATAL ERROR: learning_agent not found or incorrect type in app.state")
+         await send_json_to_websocket(websocket, {"type": "error", "message": "Internal server error: Agent not configured."})
+         await websocket.close()
+         return # Stop execution if agent isn't available
+
+    print(f"WS connection {connection_id} opened for session {session_id}")
+
+    # Verify session exists in the agent
+    initial_state = learning_agent.get_session_state(session_id)
+    if not initial_state:
+        print(f"Session {session_id} not found for WS connection {connection_id}")
+        await send_json_to_websocket(websocket, {
             "type": "error",
-            "message": f"Sesión {session_id} no encontrada"
+            "message": f"Sesión {session_id} no encontrada o inválida."
         })
         await websocket.close()
         return
-    
-    # Registrar la conexión
-    if session_id not in active_connections:
-        active_connections[session_id] = {}
-    
+
+    # Register the connection
+    if session_id not in active_connections: active_connections[session_id] = {}
     active_connections[session_id][connection_id] = websocket
-    
+    print(f"Added connection {connection_id} to active pool for session {session_id}.")
+
     try:
-        # Enviar estado inicial
-        await websocket.send_json({
+        # Send initial state to the newly connected client
+        print(f"Sending initial state for session {session_id} to conn {connection_id}")
+        await send_json_to_websocket(websocket, {
             "type": "state_update",
-            "data": session_state
+            "data": initial_state
+            # No request_id needed for initial state push
         })
-        
-        # Procesar un paso si la sesión no está esperando input
-        if not session_state.get("waiting_for_input", False):
-            result = await learning_agent.process_step(session_id)
-            
-            # Enviar resultado al cliente
-            await websocket.send_json({
-                "type": "agent_response",
-                "data": result
-            })
-        
-        # Bucle principal para recibir mensajes
+
+        # Main loop to receive messages from the client
         while True:
-            # Esperar mensaje del cliente
-            data = await websocket.receive_text()
-            
+            request_id = None # Reset request_id for each message
             try:
-                message = json.loads(data)
-                action = message.get("action", "")
-                
+                raw_data = await websocket.receive_text()
+                message = json.loads(raw_data)
+                action = message.get("action", "").lower()
+                data_payload = message.get("data", {})
+                request_id = message.get("requestId") # Capture the client's request ID
+
+                print(f"Received action '{action}' for session {session_id} (conn: {connection_id}, reqId: {request_id})")
+
+                # Process actions based on client message
                 if action == "submit_answer":
-                    # Procesar respuesta del usuario
-                    result = await learning_agent.process_user_input(
-                        session_id=session_id,
-                        user_input=message.get("data", {}).get("answer", "")
-                    )
-                    
-                    # Enviar resultado al cliente
-                    await websocket.send_json({
-                        "type": "agent_response",
-                        "data": result
-                    })
-                    
-                    # Si hay un error, no continuar procesando
-                    if "error" in result:
-                        continue
-                    
-                    # Procesar siguiente paso automáticamente si no está esperando input
-                    if not result.get("waiting_for_input", False):
-                        next_result = await learning_agent.process_step(session_id)
-                        
-                        # Enviar resultado del siguiente paso
-                        await websocket.send_json({
-                            "type": "agent_response",
-                            "data": next_result
-                        })
-                
+                    answer = data_payload.get("answer") # Get answer, check type later
+                    if not isinstance(answer, str):
+                         print(f"Invalid answer format received: {type(answer)}")
+                         await send_json_to_websocket(websocket, {"type": "error", "message": "Invalid answer format (must be string).", "requestId": request_id})
+                         continue # Skip processing this message
+
+                    # Agent handles evaluation and determines next steps
+                    results: List[Dict[str, Any]] = await learning_agent.handle_user_input(session_id, answer)
+                    # Send agent response(s) back, including the original request ID
+                    await send_agent_responses(websocket, results, request_id)
+
                 elif action == "continue":
-                    # Continuar la sesión procesando el siguiente paso
-                    result = await learning_agent.process_step(session_id)
-                    
-                    # Enviar resultado al cliente
-                    await websocket.send_json({
-                        "type": "agent_response",
-                        "data": result
-                    })
-                
+                    # Agent processes the next step in the learning flow
+                    result: Dict[str, Any] = await learning_agent.process_step(session_id)
+                    # Send agent response back, including the original request ID
+                    await send_agent_responses(websocket, [result], request_id) # Send single result as list
+
                 elif action == "get_state":
-                    # Obtener el estado actual de la sesión
-                    session_state = learning_agent.get_session_state(session_id)
-                    
-                    # Enviar estado al cliente
-                    await websocket.send_json({
+                    # Retrieve current session state from the agent
+                    current_state = learning_agent.get_session_state(session_id)
+                    response_payload = {
                         "type": "state_update",
-                        "data": session_state
-                    })
-                
-                elif action == "ping":
-                    # Simple ping-pong para mantener la conexión viva
-                    await websocket.send_json({
-                        "type": "pong",
-                        "timestamp": message.get("timestamp", 0)
-                    })
-                
-                else:
-                    # Acción desconocida
-                    await websocket.send_json({
+                        "data": current_state,
+                        "requestId": request_id # Include requestId
+                    } if current_state else {
                         "type": "error",
-                        "message": f"Acción desconocida: {action}"
+                        "message": "Failed to retrieve session state.",
+                        "requestId": request_id
+                    }
+                    await send_json_to_websocket(websocket, response_payload)
+
+                elif action == "ping":
+                    # Respond to keepalive pings
+                    await send_json_to_websocket(websocket, {
+                        "type": "pong",
+                        "timestamp": message.get("timestamp", 0),
+                        "requestId": request_id # Echo requestId
                     })
-            
+
+                else:
+                    # Handle unknown actions
+                    print(f"Received unknown action: {action}")
+                    await send_json_to_websocket(websocket, {
+                        "type": "error",
+                        "message": f"Acción desconocida: '{action}'",
+                        "requestId": request_id # Include requestId in error response
+                    })
+
+            # Handle errors within the message processing loop
             except json.JSONDecodeError:
-                # Error al decodificar el mensaje
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Formato de mensaje inválido"
-                })
-            
+                print(f"Invalid JSON received from conn {connection_id}")
+                await send_json_to_websocket(websocket, {"type": "error", "message": "Formato de mensaje inválido (no es JSON)."})
+                # No request_id available if JSON parsing failed
+            except WebSocketDisconnect:
+                 print(f"WebSocketDisconnect received inside loop for conn {connection_id}.")
+                 raise # Re-raise to be caught by the outer try/except for cleanup
             except Exception as e:
-                # Error general
-                import traceback
+                # Catch unexpected errors during message processing
+                print(f"Error processing message from conn {connection_id} (reqId: {request_id}):")
                 traceback.print_exc()
-                await websocket.send_json({
+                # Send error back to client, including request_id if available
+                await send_json_to_websocket(websocket, {
                     "type": "error",
-                    "message": f"Error: {str(e)}"
+                    "message": f"Error procesando su solicitud: {str(e)}",
+                    "requestId": request_id # Include ID if available
                 })
-    
+
+    # Handle disconnection or major errors outside the main loop
     except WebSocketDisconnect:
-        # Cliente desconectado
+        print(f"WS connection {connection_id} disconnected for session {session_id}")
+    except Exception as e:
+        # Catch unexpected errors during initial connection setup or fatal issues
+        print(f"Unhandled error in WebSocket session {session_id} (conn: {connection_id}):")
+        traceback.print_exc()
+        # Attempt to notify client before closing if possible
+        await send_json_to_websocket(websocket, {"type": "error", "message": f"Error inesperado en la sesión: {str(e)}"})
+    finally:
+        # Cleanup: Remove connection from the active pool
         if session_id in active_connections and connection_id in active_connections[session_id]:
             del active_connections[session_id][connection_id]
-            
-            # Si no hay más conexiones para esta sesión, eliminar la entrada
+            print(f"Removed connection {connection_id} from active pool for session {session_id}.")
+            # Remove the session entry entirely if no connections remain
             if not active_connections[session_id]:
                 del active_connections[session_id]
+                print(f"Removed session {session_id} entry from active WS connections pool.")
+        # Ensure websocket is closed if not already
+        try:
+            # Check state before closing, avoid errors if already closed
+            if websocket.client_state == websocket.client_state.CONNECTED:
+                 await websocket.close()
+                 print(f"Closed WebSocket connection {connection_id}.")
+        except RuntimeError as e:
+            # Ignore specific error if already closing/closed
+            if "Cannot call 'close' once a close frame has been sent" not in str(e) and \
+               "WebSocket is not connected" not in str(e):
+                 print(f"Error during WebSocket cleanup close for {connection_id}: {e}")
+        except Exception as e:
+             print(f"Generic error during WebSocket cleanup close for {connection_id}: {e}")
+        print(f"Finished cleanup for WS connection {connection_id}")
 
+
+# Endpoint for creating new sessions or getting roadmaps
 @router.websocket("/ws/new_session")
-async def websocket_new_session_endpoint(websocket: WebSocket, request: Request):
+async def websocket_new_session_endpoint(websocket: WebSocket):
     """
-    Endpoint WebSocket para crear una nueva sesión
+    Endpoint WebSocket para crear una nueva sesión o listar roadmaps.
+    Handles a single request then closes.
     """
     await websocket.accept()
-    
-    # Obtener el agente de aprendizaje
-    learning_agent = request.app.state.learning_agent
-    
-    try:
-        # Esperar mensaje con datos de la nueva sesión
-        data = await websocket.receive_text()
-        
-        try:
-            message = json.loads(data)
-            
-            if message.get("action") == "create_session":
-                # Obtener datos de la solicitud
-                session_data = message.get("data", {})
-                topic_id = session_data.get("topic_id", "fractions_introduction")
-                user_id = session_data.get("user_id")
-                initial_mastery = float(session_data.get("initial_mastery", 0.0))
-                personalized_theme = session_data.get("personalized_theme", "space")
-                
-                # Crear nueva sesión
-                try:
-                    session_id, result = await learning_agent.create_session(
-                        topic_id=topic_id,
-                        personalized_theme=personalized_theme,
-                        initial_mastery=initial_mastery,
-                        user_id=user_id
-                    )
-                    
-                    # Enviar datos de la nueva sesión
-                    await websocket.send_json({
-                        "type": "session_created",
-                        "data": {
-                            "session_id": session_id,
-                            "topic_id": topic_id,
-                            "result": result
-                        }
-                    })
-                    
-                    # Redirigir a la conexión de sesión
-                    await websocket.send_json({
-                        "type": "redirect",
-                        "url": f"/ws/session/{session_id}"
-                    })
-                    
-                except ValueError as e:
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": str(e)
-                    })
-                    
-            elif message.get("action") == "get_roadmaps":
-                # Obtener lista de roadmaps disponibles
-                roadmaps = learning_agent.get_available_roadmaps()
-                
-                await websocket.send_json({
-                    "type": "roadmaps_list",
-                    "data": roadmaps
-                })
-                
-            else:
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Acción no válida para este endpoint"
-                })
-        
-        except json.JSONDecodeError:
-            # Error al decodificar el mensaje
-            await websocket.send_json({
-                "type": "error",
-                "message": "Formato de mensaje inválido"
-            })
-        
-        except Exception as e:
-            # Error general
-            import traceback
-            traceback.print_exc()
-            await websocket.send_json({
-                "type": "error",
-                "message": f"Error: {str(e)}"
-            })
-    
-    except WebSocketDisconnect:
-        # Cliente desconectado
-        pass
+    connection_id = str(uuid.uuid4()) # Use UUID for logging clarity
+    print(f"WS connection {connection_id} opened for new_session endpoint.")
+    learning_agent: Optional[AdaptiveLearningAgent] = None
 
-# Función para enviar notificaciones a todos los clientes conectados a una sesión
-async def broadcast_to_session(session_id: str, message: Dict[str, Any]):
-    """
-    Envía un mensaje a todos los clientes conectados a una sesión
-    
-    Args:
-        session_id: ID de la sesión
-        message: Mensaje a enviar
-    """
-    if session_id in active_connections:
-        for connection in active_connections[session_id].values():
+    # Access the agent instance safely
+    try:
+        learning_agent = websocket.app.state.learning_agent
+        if not isinstance(learning_agent, AdaptiveLearningAgent):
+             raise AttributeError("learning_agent in app.state is not the correct type.")
+    except AttributeError:
+         print("FATAL ERROR: learning_agent not found or incorrect type in app.state for new_session")
+         await send_json_to_websocket(websocket, {"type": "error", "message": "Internal server error: Agent not configured."})
+         await websocket.close()
+         return
+
+    request_id = None # Initialize request_id
+    try:
+        # Expect a single message from the client for this endpoint
+        raw_data = await websocket.receive_text()
+        message = json.loads(raw_data)
+        action = message.get("action", "").lower()
+        data_payload = message.get("data", {})
+        request_id = message.get("requestId") # Capture the client's request ID
+
+        print(f"Received action '{action}' on new_session WS (conn: {connection_id}, reqId: {request_id}).")
+
+        if action == "create_session":
+            # Extract parameters for session creation
+            topic_id = data_payload.get("topic_id", "fractions_introduction")
+            user_id = data_payload.get("user_id") # Optional
+            initial_mastery_str = data_payload.get("initial_mastery", "0.0")
+            personalized_theme = data_payload.get("personalized_theme", "space")
+
+            # Safely convert initial_mastery to float
             try:
-                await connection.send_json(message)
-            except Exception:
-                pass  # Ignorar errores al enviar
+                initial_mastery = float(initial_mastery_str)
+                if not (0.0 <= initial_mastery <= 1.0):
+                    raise ValueError("Initial mastery must be between 0.0 and 1.0")
+            except (ValueError, TypeError):
+                 print(f"Invalid initial_mastery value received: {initial_mastery_str}. Defaulting to 0.0.")
+                 initial_mastery = 0.0
+                 # Optionally send an error back? Or just proceed with default?
+                 # await send_json_to_websocket(websocket, {"type": "error", "message": "Invalid initial_mastery value.", "requestId": request_id})
+                 # return # Exit if invalid value is critical
+
+            try:
+                # Call agent method to create the session
+                session_response = await learning_agent.create_session(
+                    topic_id=topic_id,
+                    personalized_theme=personalized_theme,
+                    initial_mastery=initial_mastery,
+                    user_id=user_id
+                )
+
+                # Send success response back to client, including requestId
+                await send_json_to_websocket(websocket, {
+                    "type": "session_created",
+                    "data": session_response, # Contains session_id and initial_result
+                    "requestId": request_id # Include original request ID
+                })
+                print(f"Sent session_created for {session_response.get('session_id')} back to conn {connection_id}")
+
+            except ValueError as e: # Catch specific validation errors from agent
+                print(f"ValueError during session creation: {e}")
+                await send_json_to_websocket(websocket, {"type": "error", "message": str(e), "requestId": request_id})
+            except Exception as e: # Catch unexpected errors during session creation
+                 print(f"Exception during session creation:")
+                 traceback.print_exc()
+                 await send_json_to_websocket(websocket, {"type": "error", "message": f"Error creating session: {str(e)}", "requestId": request_id})
+
+
+        elif action == "get_roadmaps":
+            # Get available learning roadmaps from the agent
+            roadmaps = learning_agent.get_available_roadmaps()
+            # Send list back to client, including requestId
+            await send_json_to_websocket(websocket, {
+                "type": "roadmaps_list",
+                "data": roadmaps,
+                "requestId": request_id # Include original request ID
+            })
+            print(f"Sent roadmaps_list back to conn {connection_id}")
+
+        else:
+            # Handle unknown actions for this specific endpoint
+             print(f"Received unknown action on new_session WS: {action}")
+             await send_json_to_websocket(websocket, {
+                "type": "error",
+                "message": f"Acción no válida para este endpoint: '{action}'",
+                "requestId": request_id # Include original request ID
+            })
+
+    # Handle exceptions for the single message processing
+    except json.JSONDecodeError:
+        print(f"Invalid JSON received from new_session conn {connection_id}")
+        await send_json_to_websocket(websocket, {"type": "error", "message": "Formato de mensaje inválido (no es JSON)."})
+    except WebSocketDisconnect:
+        # This might happen if client closes connection immediately after sending
+        print(f"Client disconnected from new_session WS ({connection_id}) before/during processing.")
+    except Exception as e:
+        # Catch unexpected errors
+        print(f"Error in new_session WebSocket ({connection_id}, reqId: {request_id}):")
+        traceback.print_exc()
+        # Attempt to send error back, include requestId if available
+        await send_json_to_websocket(websocket, {"type": "error", "message": f"Error inesperado: {str(e)}", "requestId": request_id})
+    finally:
+         # Ensure websocket is closed for this endpoint as it's request/response
+        try:
+             if websocket.client_state == websocket.client_state.CONNECTED:
+                 await websocket.close()
+        except RuntimeError: pass # Ignore if already closed
+        except Exception as e: print(f"Error closing new_session WS {connection_id}: {e}")
+        print(f"Closed new_session WS connection {connection_id}.")
+
+
+# Function to broadcast messages (e.g., for admin panel or multi-client sync)
+# Currently unused in the main flow but kept for potential future use.
+async def broadcast_to_session(session_id: str, message: Dict[str, Any]):
+    """Envía un mensaje a todos los clientes conectados a una sesión."""
+    if session_id in active_connections:
+        # Create a list of (conn_id, websocket) tuples to iterate safely
+        # as the dictionary might change during iteration if clients disconnect
+        connections_to_broadcast = list(active_connections.get(session_id, {}).items())
+        print(f"Broadcasting message to {len(connections_to_broadcast)} client(s) in session {session_id}...")
+
+        disconnected_clients = []
+        for conn_id, websocket in connections_to_broadcast:
+            try:
+                # Check if the specific websocket is still connected before sending
+                if websocket.client_state == websocket.client_state.CONNECTED:
+                    await websocket.send_json(message)
+                else:
+                     print(f"Skipping broadcast to disconnected client {conn_id} in session {session_id}.")
+                     disconnected_clients.append(conn_id)
+            except Exception as e:
+                print(f"Error broadcasting to {conn_id} in session {session_id}: {e}. Marking for removal.")
+                disconnected_clients.append(conn_id) # Mark for removal on error too
+
+        # Clean up disconnected clients after broadcasting attempt
+        if disconnected_clients:
+             session_connections = active_connections.get(session_id)
+             if session_connections: # Check if session entry still exists
+                 cleaned_count = 0
+                 for conn_id in set(disconnected_clients): # Use set to avoid duplicates
+                     if conn_id in session_connections:
+                         del session_connections[conn_id]
+                         cleaned_count += 1
+                 print(f"Cleaned up {cleaned_count} disconnected broadcast clients for session {session_id}.")
+                 # Remove the session entry entirely if no connections remain
+                 if not session_connections:
+                     del active_connections[session_id]
+                     print(f"Removed session {session_id} entry from active WS connections after broadcast cleanup.")
+    # else:
+    #     print(f"No active connections found for session {session_id} to broadcast.")
