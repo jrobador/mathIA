@@ -1,49 +1,55 @@
 /**
- * Client API for interacting with the Math Tutor backend
- * Provides methods for managing sessions and communication with the agent
+ * Cliente API para interactuar con el backend del agente matemático
+ * Ahora soporta comunicación vía WebSockets y HTTP como fallback
  */
 
 import {
   MathTutorClientConfig,
-  DiagnosticQuestionResult,
-  DiagnosticResults,
   StartSessionOptions,
   StartSessionResponse,
   ProcessInputResponse,
   SessionStatusResponse,
-  TutorConfig as SessionConfig, // Optional: Alias if needed
+  DiagnosticQuestionResult,
+  DiagnosticResults,
   AgentOutput
 } from "@/types/api";
 
-// Default API configuration
+// Configuración API por defecto
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
 class MathTutorClient {
   private baseUrl: string;
+  private wsBaseUrl: string;
   private headers: Record<string, string>;
   private currentSessionId: string | null;
-  private requestTimeoutMs: number;
-  private quickTimeoutMs: number;
-  private pollingIntervalMs: number;
-  private requestRetryCount: number;
-  // Track if a process request is in progress
+  private wsConnection: WebSocket | null;
+  private messageCallbacks: Map<string, (data: any) => void>;
+  private messageHandlers: Array<(data: any) => void>;
+  private reconnectAttempts: number;
+  private maxReconnectAttempts: number;
+  private reconnectTimeout: number;
   private processingRequest: boolean;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null;
 
   /**
    * Initialize the API client with optional configuration
    */
   constructor(config: MathTutorClientConfig = {}) {
     this.baseUrl = config.baseUrl || API_BASE_URL;
+    this.wsBaseUrl = this.baseUrl.replace(/^http/, 'ws');
     this.headers = {
       'Content-Type': 'application/json',
-      ...(config.headers || {}),
+      ...(config.headers || {})
     };
     this.currentSessionId = null;
-    this.requestTimeoutMs = 3000000;
-    this.quickTimeoutMs = 300000;  
-    this.pollingIntervalMs = 1500; 
-    this.requestRetryCount = 2;    
+    this.wsConnection = null;
+    this.messageCallbacks = new Map();
+    this.messageHandlers = [];
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 5;
+    this.reconnectTimeout = 1000;
     this.processingRequest = false;
+    this.reconnectTimer = null;
     
     // Try to restore session from localStorage if available
     this._restoreSession();
@@ -61,13 +67,11 @@ class MathTutorClient {
   }: StartSessionOptions = {}): Promise<StartSessionResponse> {
     try {
       // Configure session based on inputs
-      let sessionConfig: SessionConfig = config || {};
+      let sessionConfig = config || {};
       
       // Apply diagnostic results if available
       if (diagnostic_results) {
         sessionConfig.initial_difficulty = diagnostic_results.recommended_level || 'beginner';
-        sessionConfig.diagnostic_score = diagnostic_results.score;
-        sessionConfig.diagnostic_details = diagnostic_results.question_results;
       }
       
       // Set initial topic based on learning path
@@ -75,189 +79,239 @@ class MathTutorClient {
         sessionConfig.initial_topic = this._mapLearningPathToTopic(learning_path);
       }
 
-      console.log("Sending session start request to backend...");
+      console.log("Iniciando nueva sesión vía WebSocket...");
       
-      
-      const response = await fetch(`${this.baseUrl}/session/start`, {
-        method: 'POST',
-        headers: this.headers,
-        body: JSON.stringify({
-          personalized_theme,
-          initial_message,
-          config: sessionConfig,
-          learning_path
-        })      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Error starting session');
-      }
-
-      const data: StartSessionResponse = await response.json();
-      
-      // Store session ID immediately
-      this.currentSessionId = data.session_id;
-      this._saveSession();
-      
-      console.log("Session ID received:", data.session_id);
-      
-      // If status indicates content is still being generated, poll for completion
-      if (data.status === "initializing") {
-        console.log("Content is being generated in the background, polling for completion...");
-        try {
-          const completeData = await this.pollForSessionCompletion(data.session_id);
-          
-          // BUGFIX: Add more detailed logging
-          if (completeData) {
-            console.log("Polling complete, received data:", {
-              has_content: true,
-              content_ready: completeData.content_ready,
-              has_agent_output: !!completeData.agent_output,
-              agent_output_text: completeData.agent_output?.text ? completeData.agent_output.text.substring(0, 50) + '...' : 'none',
-              has_error: !!completeData.error
-            });
-            
-            // Update the initial output with the complete content if available
-            if (completeData.agent_output) {
-              // Check if agent_output has any valuable content before using it
-              const hasContent = completeData.agent_output.text || 
-                             completeData.agent_output.image_url || 
-                             completeData.agent_output.audio_url;
-              
-              if (hasContent) {
-                console.log("Content generation complete with valid output, updating response");
-                data.initial_output = completeData.agent_output;
-                data.status = "active";
-                
-                // Normalize URLs for image and audio
-                this._normalizeContentUrls(data.initial_output);
-                console.log("Content generation complete, updated response with full content");
-              } else {
-                console.warn("Agent output received but contains no usable content");
-                // Create a fallback if the output exists but has no content
-                data.initial_output = {
-                  text: "Your math lesson is ready. Let's get started!",
-                  prompt_for_answer: true
-                };
-                data.status = "active";
-              }
-            } else {
-              console.warn("Content marked as ready but no agent_output available");
-              // Create a fallback if no output is available
-              data.initial_output = {
-                text: "Your math lesson is ready. Let's begin!",
-                prompt_for_answer: true
-              };
-              data.status = "active";
+      // Create WebSocket connection to start new session
+      return new Promise<StartSessionResponse>((resolve, reject) => {
+        const ws = new WebSocket(`${this.wsBaseUrl}/ws/new_session`);
+        
+        ws.onopen = () => {
+          console.log("WebSocket conectado para nueva sesión");
+          ws.send(JSON.stringify({
+            action: 'create_session',
+            data: {
+              topic_id: sessionConfig.initial_topic || this._mapLearningPathToTopic(learning_path || 'fractions'),
+              personalized_theme,
+              user_id: config?.user_id,
+              initial_mastery: 0.0
             }
-          } else {
-            console.warn("Polling completed but no data returned!");
-            // Create a fallback if polling fails to return data
-            data.initial_output = {
-              text: "Your personalized math session is ready to begin.",
-              prompt_for_answer: true
-            };
-            data.status = "active";
+          }));
+        };
+        
+        ws.onerror = (event) => {
+          console.error("Error de WebSocket:", event);
+          reject(new Error("Error de conexión WebSocket"));
+          
+          // Try fallback with HTTP
+          this._startSessionHttp({
+            personalized_theme,
+            initial_message,
+            learning_path,
+            diagnostic_results
+          }).then(resolve).catch(reject);
+        };
+        
+        ws.onmessage = (event) => {
+          try {
+            const response = JSON.parse(event.data);
+            console.log("Respuesta WebSocket de nueva sesión:", response);
+            
+            if (response.type === "session_created") {
+              // Store session information
+              this.currentSessionId = response.data.session_id;
+              this._saveSession();
+              
+              // Create response object
+              const sessionResponse: StartSessionResponse = {
+                session_id: response.data.session_id,
+                initial_output: {
+                  text: response.data.result.text || "¡Bienvenido a tu sesión de aprendizaje!",
+                  image_url: response.data.result.image_url,
+                  audio_url: response.data.result.audio_url,
+                  prompt_for_answer: response.data.result.requires_input || false
+                },
+                status: "active"
+              };
+              
+              // Normalize URLs
+              this._normalizeContentUrls(sessionResponse.initial_output);
+              
+              // Close temporary connection
+              ws.close();
+              
+              // Connect to the session WebSocket
+              this._connectToSessionWebSocket();
+              
+              resolve(sessionResponse);
+            } else if (response.type === "error") {
+              reject(new Error(response.message || "Error al crear la sesión"));
+              ws.close();
+            }
+          } catch (error) {
+            console.error("Error procesando mensaje WebSocket:", error);
+            reject(error as Error);
+            ws.close();
           }
-        } catch (pollingError) {
-          console.warn("Polling for content completion failed, returning initial response:", pollingError);
-          // Create a fallback if polling fails with an error
-          data.initial_output = {
-            text: "Your math lesson is now ready to begin.",
-            prompt_for_answer: true
-          };
-          data.status = "active";
-        }
-      } else if (data.initial_output) {
-        // Normalize URLs for any content returned immediately
-        this._normalizeContentUrls(data.initial_output);
-      }
+        };
+        
+        ws.onclose = () => {
+          console.log("WebSocket de nueva sesión cerrado");
+        };
+      });
       
-      return data;
     } catch (error) {
-      console.error('Error starting session:', error);
+      console.error('Error iniciando sesión:', error);
       throw error;
     }
   }
 
   /**
-   * Process user input in an active session with retry capability
+   * Fallback: Start session via HTTP if WebSocket fails
+   */
+  private async _startSessionHttp({
+    personalized_theme = 'space',
+    initial_message = null,
+    config = null,
+    diagnostic_results = null,
+    learning_path = null
+  }: StartSessionOptions = {}): Promise<StartSessionResponse> {
+    console.log("Fallback: Iniciando sesión vía HTTP...");
+    
+    const response = await fetch(`${this.baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify({
+        topic_id: learning_path ? this._mapLearningPathToTopic(learning_path) : 'fractions_introduction',
+        personalized_theme,
+        initial_mastery: 0.0
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Error iniciando sesión vía HTTP');
+    }
+    
+    const data = await response.json();
+    this.currentSessionId = data.session_id;
+    this._saveSession();
+    
+    // Connect to the session WebSocket after starting it via HTTP
+    this._connectToSessionWebSocket();
+    
+    return {
+      session_id: data.session_id,
+      initial_output: data.result,
+      status: "active"
+    };
+  }
+
+  /**
+   * Process user input in an active session
    */
   async processInput(message: string, sessionId: string | null = null): Promise<ProcessInputResponse> {
-    // BUGFIX: Prevent multiple concurrent requests
     if (this.processingRequest) {
-      console.warn("Another request is already in progress, preventing concurrent requests");
-      throw new Error('A request is already in progress. Please wait for it to complete.');
+      console.warn("Ya hay una solicitud en proceso");
+      throw new Error('Una solicitud ya está en progreso. Por favor espere.');
     }
     
     const targetSessionId = sessionId || this.currentSessionId;
     
     if (!targetSessionId) {
-      throw new Error('No active session. Start a session first.');
+      throw new Error('No hay una sesión activa. Inicie una sesión primero.');
     }
     
     this.processingRequest = true;
     
     try {
-      // Try up to retryCount times
-      for (let attempt = 0; attempt <= this.requestRetryCount; attempt++) {
-        try {
+      // Check if WebSocket is available
+      if (this.wsConnection && this.wsConnection.readyState === WebSocket.OPEN) {
+        // Use WebSocket for communication
+        return new Promise<ProcessInputResponse>((resolve, reject) => {
+          // Generate unique ID for the request
+          const requestId = Math.random().toString(36).substring(2, 9);
           
-          console.log(`Sending input to backend (attempt ${attempt + 1}/${this.requestRetryCount + 1})...`);
-          const response = await fetch(`${this.baseUrl}/session/${targetSessionId}/process`, {
-            method: 'POST',
-            headers: this.headers,
-            body: JSON.stringify({ message })
+          // Set up callback for this request
+          this.messageCallbacks.set(requestId, (data) => {
+            // Remove the callback once called
+            this.messageCallbacks.delete(requestId);
+            
+            if (data.type === "error") {
+              reject(new Error(data.message || "Error procesando la entrada"));
+            } else if (data.type === "agent_response") {
+              // Create response object
+              const inputResponse: ProcessInputResponse = {
+                session_id: targetSessionId,
+                agent_output: {
+                  text: data.data.text || "He procesado tu entrada.",
+                  image_url: data.data.image_url,
+                  audio_url: data.data.audio_url,
+                  prompt_for_answer: data.data.requires_input || false,
+                  evaluation: data.data.evaluation_type,
+                  is_final_step: data.data.is_final_step || false
+                },
+                mastery_level: data.data.state_metadata?.mastery || 0
+              };
+              
+              // Normalize URLs
+              this._normalizeContentUrls(inputResponse.agent_output);
+              
+              resolve(inputResponse);
+            } else {
+              reject(new Error("Tipo de respuesta inesperado"));
+            }
           });
-                    
-          if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || 'Error processing input');
-          }
           
-          const data: ProcessInputResponse = await response.json();
+          // Send message via WebSocket
+          this.wsConnection?.send(JSON.stringify({
+            action: 'submit_answer',
+            requestId,
+            data: {
+              answer: message
+            }
+          }));
           
-          // BUGFIX: Log successful response details
-          console.log("Successfully processed input, received response:", {
-            session_id: data.session_id,
-            has_agent_output: !!data.agent_output,
-            mastery_level: data.mastery_level
-          });
-          
-          // Normalize URLs if output exists
-          if (data.agent_output) {
-            this._normalizeContentUrls(data.agent_output);
-          }
-          
+          // Set timeout in case no response is received
+          setTimeout(() => {
+            if (this.messageCallbacks.has(requestId)) {
+              this.messageCallbacks.delete(requestId);
+              reject(new Error("Tiempo de espera agotado"));
+            }
+          }, 30000);
+        }).finally(() => {
           this.processingRequest = false;
-          return data;
-        } catch (err) {
-          // If this was our last attempt, throw the error
-          if (attempt === this.requestRetryCount) {
-            throw err;
-          }
-          
-          // Otherwise log it and retry after a delay
-          console.warn(`Attempt ${attempt + 1} failed:`, err);
-          console.log(`Retrying in ${this.pollingIntervalMs}ms...`);
-          
-          // Wait before retry
-          await new Promise(resolve => setTimeout(resolve, this.pollingIntervalMs));
+        });
+      } else {
+        // Fallback to HTTP API
+        console.log("WebSocket no disponible, usando HTTP para enviar mensaje...");
+        const response = await fetch(`${this.baseUrl}/api/sessions/${targetSessionId}/answer`, {
+          method: 'POST',
+          headers: this.headers,
+          body: JSON.stringify({ answer: message })
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.detail || 'Error procesando la entrada vía HTTP');
         }
+        
+        const data = await response.json();
+        this.processingRequest = false;
+        
+        // Normalize URLs
+        if (data.agent_output) {
+          this._normalizeContentUrls(data.agent_output);
+        }
+        
+        return data as ProcessInputResponse;
       }
-      
-      // We should never reach here because the last failed attempt should throw
-      throw new Error('All retry attempts failed');
     } catch (error) {
-      console.error('Error processing input:', error);
+      console.error('Error procesando la entrada:', error);
       this.processingRequest = false;
       throw error;
-    } finally {
-      // Make sure we reset the flag even if an error occurred
-      this.processingRequest = false;
     }
   }
-  
+
   /**
    * Get the current status of a session
    */
@@ -265,30 +319,67 @@ class MathTutorClient {
     const targetSessionId = sessionId || this.currentSessionId;
     
     if (!targetSessionId) {
-      throw new Error('No active session.');
+      throw new Error('No hay una sesión activa.');
     }
     
     try {
-      const response = await fetch(`${this.baseUrl}/session/${targetSessionId}/status`, {
-        method: 'GET',
-        headers: this.headers,
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Error getting session status');
+      // Check if WebSocket is available
+      if (this.wsConnection && this.wsConnection.readyState === WebSocket.OPEN) {
+        return new Promise<SessionStatusResponse>((resolve, reject) => {
+          // Generate unique ID for the request
+          const requestId = Math.random().toString(36).substring(2, 9);
+          
+          // Set up callback for this request
+          this.messageCallbacks.set(requestId, (data) => {
+            // Remove the callback once called
+            this.messageCallbacks.delete(requestId);
+            
+            if (data.type === "error") {
+              reject(new Error(data.message || "Error obteniendo estado de sesión"));
+            } else if (data.type === "state_update") {
+              resolve(data.data as SessionStatusResponse);
+            } else {
+              reject(new Error("Tipo de respuesta inesperado"));
+            }
+          });
+          
+          // Send message via WebSocket
+          this.wsConnection?.send(JSON.stringify({
+            action: 'get_state',
+            requestId
+          }));
+          
+          // Set timeout in case no response is received
+          setTimeout(() => {
+            if (this.messageCallbacks.has(requestId)) {
+              this.messageCallbacks.delete(requestId);
+              reject(new Error("Tiempo de espera agotado"));
+            }
+          }, 5000);
+        });
+      } else {
+        // Fallback to HTTP API
+        const response = await fetch(`${this.baseUrl}/api/sessions/${targetSessionId}`, {
+          method: 'GET',
+          headers: this.headers,
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.detail || 'Error obteniendo estado de sesión');
+        }
+        
+        const data = await response.json();
+        
+        // Normalize URLs in agent_output if present
+        if (data.agent_output) {
+          this._normalizeContentUrls(data.agent_output);
+        }
+        
+        return data as SessionStatusResponse;
       }
-      
-      const data = await response.json();
-      
-      // Normalize URLs in agent output if present
-      if (data.agent_output) {
-        this._normalizeContentUrls(data.agent_output);
-      }
-      
-      return data;
     } catch (error) {
-      console.error('Error getting session status:', error);
+      console.error('Error obteniendo estado de sesión:', error);
       throw error;
     }
   }
@@ -300,19 +391,26 @@ class MathTutorClient {
     const targetSessionId = sessionId || this.currentSessionId;
     
     if (!targetSessionId) {
-      console.warn('No active session to end.');
+      console.warn('No hay una sesión activa para finalizar.');
       return false;
     }
     
     try {
-      const response = await fetch(`${this.baseUrl}/session/${targetSessionId}`, {
-        method: 'DELETE',
+      // Close WebSocket connection if connected
+      if (this.wsConnection) {
+        this.wsConnection.close();
+        this.wsConnection = null;
+      }
+      
+      // Make HTTP request to end session
+      const response = await fetch(`${this.baseUrl}/api/sessions/${targetSessionId}/reset`, {
+        method: 'POST',
         headers: this.headers,
       });
       
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.detail || 'Error ending session');
+        throw new Error(errorData.detail || 'Error finalizando sesión');
       }
       
       if (targetSessionId === this.currentSessionId) {
@@ -322,66 +420,15 @@ class MathTutorClient {
       
       return true;
     } catch (error) {
-      console.error('Error ending session:', error);
-      throw error;
-    }
-  }
-  
-  /**
-   * Submit feedback about a session
-   */
-  async submitFeedback(rating: number, comments: string = "", sessionId: string | null = null): Promise<any> {
-    const targetSessionId = sessionId || this.currentSessionId;
-    
-    if (!targetSessionId) {
-      throw new Error('No active session for feedback.');
-    }
-    
-    try {
-      const queryParams = new URLSearchParams({
-        rating: rating.toString(),
-        ...(comments ? { comments } : {})
-      });
+      console.error('Error finalizando sesión:', error);
       
-      const response = await fetch(`${this.baseUrl}/session/${targetSessionId}/feedback?${queryParams}`, {
-        method: 'POST',
-        headers: this.headers,
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Error sending feedback');
+      // Even if there's an error, clean up the local session
+      if (targetSessionId === this.currentSessionId) {
+        this.currentSessionId = null;
+        this._clearSession();
       }
       
-      return await response.json();
-    } catch (error) {
-      console.error('Error sending feedback:', error);
       throw error;
-    }
-  }
-  
-  /**
-   * Check if a session is healthy by requesting its status
-   * Useful to verify if a restored session is still active on the server
-   */
-  async checkSessionHealth(sessionId: string | null = null): Promise<boolean> {
-    const targetSessionId = sessionId || this.currentSessionId;
-    
-    if (!targetSessionId) {
-      return false;
-    }
-    
-    try {
-      
-      const response = await fetch(`${this.baseUrl}/session/${targetSessionId}/status`, {
-        method: 'GET',
-        headers: this.headers
-        });
-      
-      return response.ok;
-    } catch (error) {
-      console.warn('Session health check failed:', error);
-      return false;
     }
   }
   
@@ -412,141 +459,109 @@ class MathTutorClient {
   }
   
   /**
-   * Poll for session content completion
-   * @param sessionId The session ID to poll for
-   * @param maxAttempts Maximum number of polling attempts (default 60)
-   * @returns The completed session status or null if timed out
+   * Register a global message handler
    */
-  private async pollForSessionCompletion(
-    sessionId: string, 
-    maxAttempts = 60
-  ): Promise<SessionStatusResponse | null> {
-    console.log(`Polling for session ${sessionId} content completion...`);
-    
-    let attempts = 0;
-    let consecutiveErrors = 0;
-    const maxConsecutiveErrors = 3;
-    
-    while (attempts < maxAttempts) {
-      try {
-        attempts++;
-        
-        // Get the current status
-        const status = await this.getSessionStatus(sessionId);
-        
-        // Reset consecutive errors counter on successful response
-        consecutiveErrors = 0;
-        
-        // BUGFIX: More detailed logging to help debug issues
-        const agentOutputDetails = status.agent_output ? {
-          has_text: !!status.agent_output.text,
-          text_length: status.agent_output.text ? status.agent_output.text.length : 0,
-          has_image: !!status.agent_output.image_url,
-          has_audio: !!status.agent_output.audio_url,
-          prompt_for_answer: status.agent_output.prompt_for_answer
-        } : 'null';
-        
-        console.log(`Poll attempt ${attempts}, status:`, {
-          content_ready: status.content_ready,
-          has_agent_output: !!status.agent_output,
-          agent_output_details: agentOutputDetails,
-          error: status.error,
-          mastery: status.mastery_levels[status.current_topic]
-        });
-        
-        // Check if content is ready or if there was an error
-        if (status.content_ready || status.error) {
-          console.log(`Session ${sessionId} content is ready after ${attempts} attempts`);
-          
-          // BUGFIX: If content is ready but agent_output is missing/empty despite our backend fixes,
-          // we'll return the status anyway after enough attempts
-          if (status.content_ready && (!status.agent_output || !status.agent_output.text)) {
-            console.warn("Content marked as ready but agent_output is missing or empty!");
-            
-            // If we've made a lot of attempts, just return what we have
-            if (attempts > maxAttempts / 2) {
-              console.warn(`Returning current status after ${attempts} attempts despite missing output`);
-              
-              // Create a minimal local replacement if needed
-              if (!status.agent_output) {
-                console.warn("Creating minimal replacement agent_output");
-                status.agent_output = {
-                  text: "Your math lesson is ready. Please continue.",
-                  prompt_for_answer: true
-                };
-              }
-              
-              return status;
-            }
-            
-            // Otherwise wait and try again
-            const retryWait = 1500; // Increased to 1.5 seconds
-            console.log(`Waiting ${retryWait}ms to try again...`);
-            await new Promise(resolve => setTimeout(resolve, retryWait));
-            continue;
-          }
-          
-          return status;
-        }
-        
-        // Wait before trying again - increase wait time for later attempts
-        const waitTime = Math.min(this.pollingIntervalMs * (1 + Math.floor(attempts / 10)), 3000);
-        console.log(`Waiting for session content, attempt ${attempts}/${maxAttempts} (${waitTime}ms)...`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
-        
-      } catch (error) {
-        console.error(`Error polling session status (attempt ${attempts}):`, error);
-        consecutiveErrors++;
-        
-        // If we have too many consecutive errors, create a fallback response
-        if (consecutiveErrors >= maxConsecutiveErrors) {
-          console.warn(`${maxConsecutiveErrors} consecutive errors encountered, creating fallback response`);
-          
-          // Create a fallback response
-          const fallbackResponse: SessionStatusResponse = {
-            session_id: sessionId,
-            current_topic: "unknown",
-            mastery_levels: {},
-            current_cpa_phase: "Concrete",
-            is_active: true,
-            content_ready: true,
-            agent_output: {
-              text: "We encountered an issue loading your math lesson. Please reload the page to try again.",
-              prompt_for_answer: false
-            },
-            error: String(error),
-            created_at: Date.now() / 1000,
-            last_updated: Date.now() / 1000
-          };
-          
-          return fallbackResponse;
-        }
-        
-        // Wait a bit longer after errors
-        await new Promise(resolve => setTimeout(resolve, this.pollingIntervalMs * 2));
-      }
+  addMessageHandler(handler: (data: any) => void): void {
+    if (typeof handler === 'function' && !this.messageHandlers.includes(handler)) {
+      this.messageHandlers.push(handler);
+    }
+  }
+  
+  /**
+   * Remove a message handler
+   */
+  removeMessageHandler(handler: (data: any) => void): void {
+    const index = this.messageHandlers.indexOf(handler);
+    if (index !== -1) {
+      this.messageHandlers.splice(index, 1);
+    }
+  }
+  
+  /**
+   * Connect to a session's WebSocket
+   */
+  private _connectToSessionWebSocket(): void {
+    if (!this.currentSessionId) {
+      console.warn('No hay ID de sesión para conectar');
+      return;
     }
     
-    console.warn(`Polling timed out after ${maxAttempts} attempts for session ${sessionId}`);
+    // Clear any existing connection
+    if (this.wsConnection) {
+      this.wsConnection.close();
+    }
     
-    // Create a timeout response
-    return {
-      session_id: sessionId,
-      current_topic: "unknown",
-      mastery_levels: {},
-      current_cpa_phase: "Concrete",
-      is_active: true,
-      content_ready: true,
-      agent_output: {
-        text: "It's taking longer than expected to prepare your math lesson. Please reload the page to try again.",
-        prompt_for_answer: false
-      },
-      error: "Polling timeout",
-      created_at: Date.now() / 1000,
-      last_updated: Date.now() / 1000
+    // Reset reconnection attempts
+    this.reconnectAttempts = 0;
+    
+    // Connect to the session WebSocket
+    const ws = new WebSocket(`${this.wsBaseUrl}/ws/session/${this.currentSessionId}`);
+    
+    ws.onopen = () => {
+      console.log(`WebSocket conectado a la sesión ${this.currentSessionId}`);
+      this.wsConnection = ws;
+      this.reconnectAttempts = 0;
+      
+      // Clear any reconnection timer
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+    };
+    
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        console.log("Mensaje WebSocket de la sesión:", data);
+        
+        // Check if it's a response to a specific request
+        if (data.requestId && this.messageCallbacks.has(data.requestId)) {
+          const callback = this.messageCallbacks.get(data.requestId);
+          if (callback) {
+            callback(data);
+          }
+        } else {
+          // Handle other types of messages
+          // Notify all registered handlers
+          this.messageHandlers.forEach(handler => {
+            try {
+              handler(data);
+            } catch (handlerError) {
+              console.error("Error en manejador de mensajes:", handlerError);
+            }
+          });
+        }
+      } catch (error) {
+        console.error("Error procesando mensaje WebSocket:", error);
+      }
+    };
+    
+    ws.onerror = (event) => {
+      console.error("Error de WebSocket:", event);
+    };
+    
+    ws.onclose = (event) => {
+      console.log(`Conexión WebSocket cerrada: ${event.code} - ${event.reason}`);
+      this.wsConnection = null;
+      
+      // Try to reconnect if necessary
+      if (this.reconnectAttempts < this.maxReconnectAttempts) {
+        this.reconnectAttempts++;
+        const delay = this.reconnectTimeout * Math.pow(1.5, this.reconnectAttempts - 1);
+        
+        console.log(`Reconectando en ${delay}ms (intento ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+        
+        this.reconnectTimer = setTimeout(() => {
+          if (this.currentSessionId) {
+            this._connectToSessionWebSocket();
+          }
+        }, delay);
+      } else {
+        console.warn(`Intentos máximos de reconexión (${this.maxReconnectAttempts}) alcanzados`);
+      }
     };
   }
-
+  
   /**
    * Get the current session ID
    */
@@ -560,6 +575,9 @@ class MathTutorClient {
   setCurrentSessionId(sessionId: string): void {
     this.currentSessionId = sessionId;
     this._saveSession();
+    
+    // Connect to the session WebSocket
+    this._connectToSessionWebSocket();
   }
   
   /**
@@ -570,12 +588,18 @@ class MathTutorClient {
   }
   
   /**
-   * Normalizes relative URLs in agent output to absolute URLs
+   * Check if the WebSocket is connected
+   */
+  isWebSocketConnected(): boolean {
+    return this.wsConnection !== null && this.wsConnection.readyState === WebSocket.OPEN;
+  }
+  
+  /**
+   * Normalize relative URLs in agent output to absolute URLs
    */
   private _normalizeContentUrls(agentOutput: AgentOutput): void {
     if (!agentOutput) return;
     
-    // BUGFIX: Add safety checks before URL manipulation
     try {
       if (agentOutput.image_url && typeof agentOutput.image_url === 'string' && agentOutput.image_url.startsWith('/')) {
         agentOutput.image_url = `${this.baseUrl}${agentOutput.image_url}`;
@@ -585,7 +609,7 @@ class MathTutorClient {
         agentOutput.audio_url = `${this.baseUrl}${agentOutput.audio_url}`;
       }
     } catch (error) {
-      console.warn('Error normalizing content URLs:', error);
+      console.warn('Error normalizando URLs de contenido:', error);
     }
   }
   
@@ -605,35 +629,6 @@ class MathTutorClient {
   }
   
   /**
-   * Retry mechanism for API calls
-   * @param operation The async operation to retry
-   * @param retries Maximum number of retries
-   * @param delay Delay between retries in ms
-   */
-  private async _retryOperation<T>(
-    operation: () => Promise<T>, 
-    retries: number = 2,
-    delay: number = 1000,
-    backoff: number = 1.5
-  ): Promise<T> {
-    try {
-      return await operation();
-    } catch (error) {
-      if (retries <= 0) throw error;
-      
-      console.warn(`Operation failed, retrying in ${delay}ms... (${retries} attempts left)`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-      
-      return this._retryOperation(
-        operation, 
-        retries - 1, 
-        Math.floor(delay * backoff),
-        backoff
-      );
-    }
-  }
-  
-  /**
    * Save session to localStorage
    */
   private _saveSession(): void {
@@ -642,7 +637,7 @@ class MathTutorClient {
         localStorage.setItem('mathTutorSessionId', this.currentSessionId);
         localStorage.setItem('mathTutorSessionTimestamp', Date.now().toString());
       } catch (e) {
-        console.warn('Could not save session to localStorage', e);
+        console.warn('No se pudo guardar la sesión en localStorage', e);
       }
     }
   }
@@ -662,23 +657,17 @@ class MathTutorClient {
           (Date.now() - parseInt(sessionTimestamp)) > SESSION_MAX_AGE;
           
         if (savedSessionId && !isSessionExpired) {
-          console.log(`Restoring session: ${savedSessionId}`);
+          console.log(`Restaurando sesión: ${savedSessionId}`);
           this.currentSessionId = savedSessionId;
           
-          // Verify session is still active on server
-          this.checkSessionHealth(savedSessionId).then(isHealthy => {
-            if (!isHealthy) {
-              console.warn('Restored session is no longer active on server, clearing local session');
-              this._clearSession();
-              this.currentSessionId = null;
-            }
-          });
+          // Connect to the session WebSocket
+          this._connectToSessionWebSocket();
         } else if (isSessionExpired) {
-          console.log('Session expired, clearing');
+          console.log('Sesión expirada, limpiando');
           this._clearSession();
         }
       } catch (e) {
-        console.warn('Could not restore session from localStorage', e);
+        console.warn('No se pudo restaurar la sesión desde localStorage', e);
         this._clearSession();
       }
     }
@@ -693,7 +682,7 @@ class MathTutorClient {
         localStorage.removeItem('mathTutorSessionId');
         localStorage.removeItem('mathTutorSessionTimestamp');
       } catch (e) {
-        console.warn('Could not clear session from localStorage', e);
+        console.warn('No se pudo limpiar la sesión de localStorage', e);
       }
     }
   }

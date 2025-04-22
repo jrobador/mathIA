@@ -1,46 +1,80 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import React, { JSX, createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { useMathTutor } from "@/hooks/use-math-tutor";
-import { AgentOutput } from "@/types/api";
 
-// Message type definitions
-export type MessageType = "system" | "user" | "assistant";
+// Definición de la interfaz AgentOutput que refleja la estructura real que recibimos
+interface AgentOutput {
+  text?: string;
+  image_url?: string | null;
+  audio_url?: string | null;
+  evaluation?: string | null;
+  prompt_for_answer?: boolean;
+  is_final_step?: boolean;
+}
+
+// Definiciones de tipos
+export enum MessageType {
+  SYSTEM = "system",
+  USER = "user",
+  ASSISTANT = "assistant"
+}
+
+export interface MessageOptions {
+  imageUrl?: string | null;
+  audioUrl?: string | null;
+  isEvaluation?: boolean;
+  evaluationType?: string | null;
+  isCorrect?: boolean;
+}
 
 export interface Message {
   id: string;
   type: MessageType;
   content: string;
   timestamp: Date;
+  imageUrl?: string | null;
+  audioUrl?: string | null;
+  isEvaluation?: boolean;
+  evaluationType?: string | null;
+  isCorrect?: boolean;
 }
 
-// Updated context interface with prepareForUnmount
+export interface StartSessionOptions {
+  theme?: string;
+  learningPath?: string;
+  initialMessage?: string;
+  diagnosticResults?: any[];
+}
+
+// Interfaz del contexto
 interface TutorContextType {
   messages: Message[];
   isLoading: boolean;
   sessionId: string | null;
   currentOutput: AgentOutput | null;
   masteryLevel: number;
-  error?: { message: string };
+  isConnected: boolean;
+  error?: Error | null;
   
-  startSession: (options: {
-    theme?: string;
-    learningPath?: string;
-    initialMessage?: string;
-    diagnosticResults?: any[];
-  }) => Promise<void>;
-  
+  startSession: (options: StartSessionOptions) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   endSession: () => Promise<void>;
   clearMessages: () => void;
-  prepareForUnmount: () => void; // Added new method
+  prepareForUnmount: () => void;
 }
 
+// Crear el contexto con un valor inicial de undefined
 const TutorContext = createContext<TutorContextType | undefined>(undefined);
 
+// Generar ID único para mensajes
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
-export function TutorProvider({ children }: { children: ReactNode }) {
+interface TutorProviderProps {
+  children: ReactNode;
+}
+
+export function TutorProvider({ children }: TutorProviderProps): JSX.Element {
   const [messages, setMessages] = useState<Message[]>([]);
   
   const {
@@ -48,41 +82,51 @@ export function TutorProvider({ children }: { children: ReactNode }) {
     agentOutput,
     isLoading,
     masteryLevel,
+    isConnected,
+    error,
     startSession: startTutorSession,
     sendMessage: sendTutorMessage,
     endSession: endTutorSession,
-    prepareForUnmount, // Get the new method
+    prepareForUnmount,
   } = useMathTutor();
 
+  // Procesar nuevas salidas del agente con verificación de tipo explícita
   useEffect(() => {
-    if (agentOutput && agentOutput.text) {
-      addMessage("assistant", agentOutput.text);
+    // Asegurar que agentOutput sea tratado con el tipo correcto
+    if (agentOutput) {
+      const output = agentOutput as AgentOutput;
+      
+      if (output.text) {
+        addMessage(MessageType.ASSISTANT, output.text, {
+          imageUrl: output.image_url,
+          audioUrl: output.audio_url,
+          isEvaluation: output.evaluation ? true : false,
+          evaluationType: output.evaluation,
+          isCorrect: output.evaluation === "Correct"
+        });
+      }
     }
   }, [agentOutput]);
 
-  const addMessage = (type: MessageType, content: string) => {
+  const addMessage = (type: MessageType, content: string, options: MessageOptions = {}): void => {
     const newMessage: Message = {
       id: generateId(),
       type,
       content,
       timestamp: new Date(),
+      ...options
     };
     
     setMessages((prev) => [...prev, newMessage]);
   };
 
-  const startSession = async (options: {
-    theme?: string;
-    learningPath?: string;
-    initialMessage?: string;
-    diagnosticResults?: any[];
-  }) => {
+  const startSession = async (options: StartSessionOptions = {}): Promise<void> => {
     clearMessages();
     
-    addMessage("system", "¡Bienvenido a tu sesión de aprendizaje! Estoy aquí para ayudarte.");
+    addMessage(MessageType.SYSTEM, "¡Bienvenido a tu sesión de aprendizaje! Estoy aquí para ayudarte.");
     
     if (options.initialMessage) {
-      addMessage("user", options.initialMessage);
+      addMessage(MessageType.USER, options.initialMessage);
     }
     
     await startTutorSession({
@@ -93,18 +137,18 @@ export function TutorProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  const sendMessage = async (content: string) => {
-    addMessage("user", content);
+  const sendMessage = async (content: string): Promise<void> => {
+    addMessage(MessageType.USER, content);
     
     await sendTutorMessage(content);
   };
 
-  const endSession = async () => {
+  const endSession = async (): Promise<void> => {
     await endTutorSession();
     clearMessages();
   };
 
-  const clearMessages = () => {
+  const clearMessages = (): void => {
     setMessages([]);
   };
 
@@ -112,19 +156,21 @@ export function TutorProvider({ children }: { children: ReactNode }) {
     messages,
     isLoading,
     sessionId,
-    currentOutput: agentOutput,
+    currentOutput: agentOutput as AgentOutput | null,
     masteryLevel,
+    isConnected,
+    error,
     startSession,
     sendMessage,
     endSession,
     clearMessages,
-    prepareForUnmount, // Expose the new method
+    prepareForUnmount
   };
 
   return <TutorContext.Provider value={value}>{children}</TutorContext.Provider>;
 }
 
-export function useTutor() {
+export function useTutor(): TutorContextType {
   const context = useContext(TutorContext);
   
   if (context === undefined) {
