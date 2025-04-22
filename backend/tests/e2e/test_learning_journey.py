@@ -1,11 +1,9 @@
 # backend/tests/e2e/test_learning_journey.py
 
-import pytest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 from main import app
-from app.schemas.session import LearningPath, DiagnosticData, DifficultySetting
-import uuid
+from app.schemas.session import LearningPath, DifficultySetting
 
 class TestCompleteLearningJourney:
     """Test the complete student learning journey from start to mastery."""
@@ -26,21 +24,24 @@ class TestCompleteLearningJourney:
         client = TestClient(app)
         
         # --- Step 1: Start session with diagnostic assessment ---
-        with patch('uuid.uuid4', return_value="journey-session-id"):
-            # Create diagnostic results indicating beginner level
-            diagnostic_data = {
-                "score": 25.0,
-                "correct_answers": 1,
-                "total_questions": 4,
-                "recommended_level": DifficultySetting.BEGINNER.value,
-                "question_results": [
-                    {"question_id": "q1", "correct": True, "concept_tested": "fractions_introduction"},
-                    {"question_id": "q2", "correct": False, "concept_tested": "fractions_equivalent"},
-                    {"question_id": "q3", "correct": False, "concept_tested": "fractions_comparison"},
-                    {"question_id": "q4", "correct": False, "concept_tested": "fractions_addition"}
-                ]
-            }
-            
+        session_id = "journey-session-id"
+        
+        # Create diagnostic results indicating beginner level
+        diagnostic_data = {
+            "score": 25.0,
+            "correct_answers": 1,
+            "total_questions": 4,
+            "recommended_level": DifficultySetting.BEGINNER.value,
+            "question_results": [
+                {"question_id": "q1", "correct": True, "concept_tested": "fractions_introduction"},
+                {"question_id": "q2", "correct": False, "concept_tested": "fractions_equivalent"},
+                {"question_id": "q3", "correct": False, "concept_tested": "fractions_comparison"},
+                {"question_id": "q4", "correct": False, "concept_tested": "fractions_addition"}
+            ]
+        }
+        
+        # Use a more specific patch for the session creation only
+        with patch('app.api.endpoints.session.uuid.uuid4', return_value=session_id):
             # Start session with diagnostic results
             response = client.post(
                 "/session/start",
@@ -54,7 +55,7 @@ class TestCompleteLearningJourney:
             # Verify session started successfully
             assert response.status_code == 200
             session_data = response.json()
-            assert session_data["session_id"] == "journey-session-id"
+            assert session_data["session_id"] == session_id
         
         # --- Setup complete session state tracking ---
         session_state = {
@@ -67,18 +68,19 @@ class TestCompleteLearningJourney:
             "messages": []
         }
         
-        # Mock the session for other API endpoints
-        with patch('app.api.endpoints.session.active_sessions') as mock_sessions:
-            mock_sessions.get.return_value = {
-                "journey-session-id": {
-                    "state": session_state,
-                    "content_ready": True,
-                    "created_at": 1682600000.0,
-                    "last_updated": 1682600100.0
-                }
+        # Patch the actual session access in the module
+        # First, create a mock session dictionary
+        mock_sessions = {
+            session_id: {
+                "state": session_state,
+                "content_ready": True,
+                "created_at": 1682600000.0,
+                "last_updated": 1682600100.0
             }
-            mock_sessions.__getitem__.side_effect = lambda x: mock_sessions.get.return_value[x]
-            
+        }
+        
+        # Use patch.dict to properly handle dictionary-style access
+        with patch.dict('app.api.endpoints.session.active_sessions', mock_sessions, clear=True):
             # --- Step 2: First session should present theory ---
             with patch('app.api.endpoints.session.compiled_app.ainvoke') as mock_invoke:
                 # Theory presentation response
@@ -96,11 +98,12 @@ class TestCompleteLearningJourney:
                 }
                 
                 # Check session status
-                status_response = client.get("/session/journey-session-id/status")
+                status_response = client.get(f"/session/{session_id}/status")
                 assert status_response.status_code == 200
                 
                 # Update tracking state
                 session_state.update(mock_invoke.return_value)
+                mock_sessions[session_id]["state"] = session_state
             
             # --- Step 3: Next, guided practice ---
             with patch('app.api.endpoints.session.compiled_app.ainvoke') as mock_invoke:
@@ -124,7 +127,7 @@ class TestCompleteLearningJourney:
                 
                 # Process an empty input to move forward
                 response = client.post(
-                    "/session/journey-session-id/process",
+                    f"/session/{session_id}/process",
                     json={"message": "I'm ready to learn"}
                 )
                 
@@ -133,6 +136,7 @@ class TestCompleteLearningJourney:
                 
                 # Update tracking state
                 session_state.update(mock_invoke.return_value)
+                mock_sessions[session_id]["state"] = session_state
             
             # --- Step 4: Answer correctly ---
             with patch('app.api.endpoints.session.compiled_app.ainvoke') as mock_invoke:
@@ -155,7 +159,7 @@ class TestCompleteLearningJourney:
                 
                 # Submit the answer
                 response = client.post(
-                    "/session/journey-session-id/process",
+                    f"/session/{session_id}/process",
                     json={"message": "The answer is 1/2"}
                 )
                 
@@ -164,6 +168,7 @@ class TestCompleteLearningJourney:
                 
                 # Update tracking state
                 session_state.update(mock_invoke.return_value)
+                mock_sessions[session_id]["state"] = session_state
             
             # --- Step 5: Get an independent practice problem ---
             with patch('app.api.endpoints.session.compiled_app.ainvoke') as mock_invoke:
@@ -187,7 +192,7 @@ class TestCompleteLearningJourney:
                 
                 # Process input to get the next problem
                 response = client.post(
-                    "/session/journey-session-id/process",
+                    f"/session/{session_id}/process",
                     json={"message": "Let me try another problem"}
                 )
                 
@@ -196,6 +201,7 @@ class TestCompleteLearningJourney:
                 
                 # Update tracking state
                 session_state.update(mock_invoke.return_value)
+                mock_sessions[session_id]["state"] = session_state
             
             # --- Step 6: Answer incorrectly ---
             with patch('app.api.endpoints.session.compiled_app.ainvoke') as mock_invoke:
@@ -218,7 +224,7 @@ class TestCompleteLearningJourney:
                 
                 # Submit incorrect answer
                 response = client.post(
-                    "/session/journey-session-id/process",
+                    f"/session/{session_id}/process",
                     json={"message": "The answer is 1/4"}
                 )
                 
@@ -227,6 +233,7 @@ class TestCompleteLearningJourney:
                 
                 # Update tracking state
                 session_state.update(mock_invoke.return_value)
+                mock_sessions[session_id]["state"] = session_state
             
             # --- Steps 7-9: Answer several problems correctly to build mastery ---
             for i in range(3):
@@ -250,7 +257,7 @@ class TestCompleteLearningJourney:
                     
                     # Submit correct answer
                     response = client.post(
-                        "/session/journey-session-id/process",
+                        f"/session/{session_id}/process",
                         json={"message": f"The answer is {i+1}/4"}
                     )
                     
@@ -259,6 +266,7 @@ class TestCompleteLearningJourney:
                     
                     # Update tracking state
                     session_state.update(mock_invoke.return_value)
+                    mock_sessions[session_id]["state"] = session_state
             
             # --- Step 10: High mastery triggers topic advancement ---
             with patch('app.api.endpoints.session.compiled_app.ainvoke') as mock_invoke:
@@ -282,20 +290,21 @@ class TestCompleteLearningJourney:
                 
                 # Submit one more correct answer
                 response = client.post(
-                    "/session/journey-session-id/process",
+                    f"/session/{session_id}/process",
                     json={"message": "I think I understand fractions now"}
                 )
                 
                 assert response.status_code == 200
                 # Check for topic advancement
-                status_response = client.get("/session/journey-session-id/status")
+                status_response = client.get(f"/session/{session_id}/status")
                 assert "fractions_equivalent" in status_response.json()["current_topic"]
                 
                 # Update tracking state
                 session_state.update(mock_invoke.return_value)
+                mock_sessions[session_id]["state"] = session_state
             
             # --- Verify session status at the end ---
-            status_response = client.get("/session/journey-session-id/status")
+            status_response = client.get(f"/session/{session_id}/status")
             status_data = status_response.json()
             
             # Verify progression
