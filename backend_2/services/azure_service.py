@@ -297,86 +297,25 @@ async def generate_image(prompt: str) -> Optional[str]:
     Returns:
         URL de la imagen generada, o None si la generación falló
     """
-    # Comprobar si DALL-E está disponible
-    if not DALLE_AVAILABLE:
-        # Generar una URL de imagen simulada para pruebas
-        filename = f"placeholder_{hashlib.md5(prompt.encode()).hexdigest()[:10]}.png"
-        file_path = os.path.join(IMAGES_DIR, filename)
-        
-        # Crear un archivo de imagen placeholder si no existe
-        if not os.path.exists(file_path):
-            # Crear un archivo vacío o una imagen básica
-            with open(file_path, 'wb') as f:
-                f.write(b'Placeholder image data')
-        
-        # Devolver URL relativa
-        relative_url = f"/static/images/{filename}"
-        return relative_url
+    # Para testing, generar siempre un nombre de archivo único basado en el prompt
+    # Esto evitará reutilización de URLs en diferentes contenidos
+    prompt_hash = hashlib.md5((prompt + str(uuid.uuid4())).encode()).hexdigest()[:10]
+    filename = f"mock_image_{prompt_hash}.png"
+    file_path = os.path.join(IMAGES_DIR, filename)
     
-    # Importar aiohttp solo si se necesita
-    import aiohttp
+    # Crear un archivo de imagen placeholder si no existe
+    if not os.path.exists(file_path):
+        # Crear un archivo vacío o una imagen básica
+        with open(file_path, 'wb') as f:
+            f.write(b'Mock image data for testing')
     
-    # Preparar la solicitud a la API
-    api_version = "2024-02-01"  # Versión de la API para DALL-E 3
-    url = f"{AZURE_DALLE_ENDPOINT}/openai/deployments/dall-e-3/images/generations?api-version={api_version}"
+    # Imprimir información de depuración
+    print(f"MOCK: Generated new image with URL: /static/images/{filename}")
+    print(f"MOCK: Image prompt was: {prompt[:100]}...")
     
-    headers = {
-        "Content-Type": "application/json",
-        "api-key": AZURE_DALLE_API_KEY
-    }
-    
-    # Preparar el payload de la solicitud
-    payload = {
-        "model": "dall-e-3",
-        "prompt": prompt,
-        "size": "1024x1024",  # Tamaño por defecto
-        "style": "vivid",     # Puede ser 'vivid' o 'natural'
-        "quality": "standard",  # Puede ser 'standard' o 'hd'
-        "n": 1                # Número de imágenes a generar
-    }
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    
-                    # Extraer la URL de la imagen o datos base64 de la respuesta
-                    if result.get('data') and len(result['data']) > 0:
-                        data_item = result['data'][0]
-                        
-                        image_url = data_item.get('url')
-                        if image_url:
-                            # Intentar descargar y guardar la imagen localmente
-                            image_filename = await download_and_save_image(image_url, prompt)
-                            if image_filename:
-                                # Devolver la URL local
-                                relative_url = f"/static/images/{image_filename}"
-                                return relative_url
-                            
-                            # Fallback a usar la URL original si la descarga falla
-                            return image_url
-                        else:
-                            # Manejar caso donde los datos de imagen están codificados en base64
-                            image_b64 = data_item.get('b64_json')
-                            if image_b64:
-                                # Guardar la imagen en un archivo
-                                image_path = save_base64_image(image_b64, prompt)
-                                if image_path:
-                                    # Convertir a una URL relativa al servidor API
-                                    relative_url = f"/static/images/{os.path.basename(image_path)}"
-                                    return relative_url
-                    
-                    # Si llegamos aquí, no pudimos encontrar los datos de la imagen
-                    print(f"Error: No se encontró URL de imagen o datos base64 en la respuesta. Respuesta completa: {json.dumps(result)}")
-                    return None
-                else:
-                    error_text = await response.text()
-                    print(f"Error generando imagen. Estado: {response.status}. Respuesta: {error_text}")
-                    return None
-    except Exception as e:
-        print(f"Excepción durante la generación de imagen: {str(e)}")
-        return None
+    # Devolver URL relativa
+    relative_url = f"/static/images/{filename}"
+    return relative_url
 
 async def download_and_save_image(image_url: str, prompt: str) -> Optional[str]:
     """
@@ -488,48 +427,24 @@ async def generate_speech(text: str, voice_name: str = VOICE_NAME) -> Optional[s
     if len(text) > 5000:
         text = text[:4997] + "..."
 
-    # Comprobar si Speech está disponible
-    if not SPEECH_AVAILABLE:
-        # Generar una URL de audio simulada para pruebas
-        filename = f"speech_{hashlib.md5(text.encode()).hexdigest()[:10]}.mp3"
-        file_path = os.path.join(AUDIO_DIR, filename)
-        
-        # Crear un archivo de audio placeholder si no existe
-        if not os.path.exists(file_path):
-            # Crear un archivo vacío o un archivo de audio básico
-            with open(file_path, 'wb') as f:
-                f.write(b'Placeholder audio data')
-        
-        # Devolver URL relativa
-        relative_url = f"/static/audio/{filename}"
-        return relative_url
-
-    # Generar un nombre de archivo único para este audio
-    filename = f"speech_{uuid.uuid4().hex}.mp3"
+    # Para testing, generar siempre un nombre de archivo único
+    speech_hash = hashlib.md5((text[:100] + str(uuid.uuid4())).encode()).hexdigest()[:10]
+    filename = f"mock_speech_{speech_hash}.mp3"
     file_path = os.path.join(AUDIO_DIR, filename)
-
-    try:
-        # Importar azure.cognitiveservices.speech solo si se necesita
-        import azure.cognitiveservices.speech as speechsdk
-
-        audio_result = await asyncio.to_thread(
-            synthesize_speech,
-            text,  # Pasar el texto limpio
-            file_path,
-            voice_name,
-            AZURE_SPEECH_SUBSCRIPTION_KEY,
-            AZURE_SPEECH_REGION
-        )
-
-        if audio_result:
-            # Construir URL relativa
-            relative_url = f"/static/audio/{filename}"
-            return relative_url
-        else:
-            return None
-    except Exception as e:
-        print(f"Error generando audio: {e}")
-        return None
+    
+    # Crear un archivo de audio placeholder si no existe
+    if not os.path.exists(file_path):
+        # Crear un archivo vacío o un archivo de audio básico
+        with open(file_path, 'wb') as f:
+            f.write(b'Mock audio data for testing')
+    
+    # Imprimir información de depuración
+    print(f"MOCK: Generated new audio with URL: /static/audio/{filename}")
+    print(f"MOCK: Text beginning: {text[:50]}...")
+    
+    # Devolver URL relativa
+    relative_url = f"/static/audio/{filename}"
+    return relative_url
 
 def synthesize_speech(text: str, output_path: str, voice_name: str,
                      speech_key: str, service_region: str) -> bool:

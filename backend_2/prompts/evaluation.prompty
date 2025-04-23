@@ -31,8 +31,14 @@ Provide a detailed and constructive evaluation, explaining:
 - Specific errors (if any)
 - How the answer could be improved
 
-IMPORTANT: Start your response with "[EVALUATION: X]" where X is one of: 
-Correct, Incorrect_Conceptual, Incorrect_Calculation, Unclear.
+IMPORTANT: Begin your response with EXACTLY one of these evaluation results:
+[EVALUATION: CORRECT]
+[EVALUATION: INCORRECT_CONCEPTUAL]
+[EVALUATION: INCORRECT_CALCULATION]
+[EVALUATION: UNCLEAR]
+
+Make sure this tag appears at the very beginning of your response, exactly as shown above.
+DO NOT include the word "CORRECT" elsewhere in your response unless you truly mean the answer is correct.
 
 user:
 Problem: {{problem}}

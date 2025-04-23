@@ -246,18 +246,48 @@ async def present_guided_practice(state: StudentState) -> Dict[str, Any]:
             
             El problema debe incluir instrucciones paso a paso y pistas para ayudar al estudiante.
             Incluye al final la solución esperada en formato:
-            SOLUCIÓN: [respuesta correcta]"""
+            ===SOLUTION FOR EVALUATION===
+            [solución detallada]
+            
+            Asegúrate de que la respuesta numérica final aparezca claramente, por ejemplo: 
+            "La respuesta es 10 space rocks" o "El resultado es 15 objetos."
+            """
             
             system_message = "Eres un tutor educativo experto que crea problemas matemáticos adaptados al nivel del estudiante."
             practice_content = await invoke_llm(prompt, system_message)
         
-        # Extraer la solución
-        solution_match = re.search(r"SOLUCIÓN:(.+?)$", practice_content, re.DOTALL | re.IGNORECASE | re.MULTILINE)
+        # Extraer la solución (FIXED)
+        solution_match = re.search(r"===SOLUTION FOR EVALUATION===(.*?)$", practice_content, re.DOTALL | re.IGNORECASE | re.MULTILINE)
         if not solution_match:
+            # Try alternative formats that might be used
             solution_match = re.search(r"SOLUCIÓN:(.+?)$", practice_content, re.DOTALL | re.IGNORECASE | re.MULTILINE)
             
-        solution_text = solution_match.group(1).strip() if solution_match else "No Solution Found"
-        problem_text = practice_content.replace(solution_match.group(0), "").strip() if solution_match else practice_content.strip()
+        # Extract the actual answer from the solution text
+        if solution_match:
+            full_solution = solution_match.group(1).strip()
+            # Try to extract just the final answer number from the solution text
+            answer_match = re.search(r"(?:answer|final answer|result|answer is|astronaut has)[:\s]*(\d+)\s*(?:space rocks|boxes|moon rocks|objects|items)?", full_solution, re.IGNORECASE)
+            if answer_match:
+                solution_text = answer_match.group(1).strip()
+            else:
+                # Fall back to a simpler pattern looking for a number near the end
+                answer_match = re.search(r"(\d+)\s*(?:space rocks|boxes|moon rocks|objects|items)(?:\s*(?:left|remaining|in total|altogether|in all))?", full_solution, re.IGNORECASE)
+                if answer_match:
+                    solution_text = answer_match.group(1).strip()
+                else:
+                    # If still no match, use the full solution
+                    solution_text = full_solution
+        else:
+            solution_text = "No Solution Found"
+            print(f"WARNING: Could not extract solution from guided practice content")
+        
+        # Debug logging
+        print(f"Extracted solution: '{solution_text}' from guided practice")
+        
+        # Remove the solution from what's shown to the student
+        problem_text = practice_content
+        if solution_match:
+            problem_text = practice_content.replace(solution_match.group(0), "").strip()
         
         image_url = await generate_image(f"Problema matemático de {topic.title} con tema {state.personalized_theme}")
         audio_url = await generate_speech(problem_text)
@@ -290,6 +320,8 @@ async def present_guided_practice(state: StudentState) -> Dict[str, Any]:
         
     except Exception as e:
         print(f"Error en present_guided_practice: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "action": "error",
             "error": str(e),
@@ -316,6 +348,13 @@ async def present_independent_practice(state: StudentState) -> Dict[str, Any]:
     
     mastery = state.topic_mastery.get(topic_id, 0.1)
     
+    # Get context from previous problem for continuity
+    previous_context = ""
+    if state.last_problem_details and "problem" in state.last_problem_details:
+        previous_problem = state.last_problem_details["problem"]
+        # Extract a brief context (first 100 chars)
+        previous_context = f"Similar theme to the previous exercise, but a bit more challenging"
+    
     try:
         # Construir ruta a la plantilla de práctica independiente
         practice_template_path = os.path.join(PROMPTS_DIR, "independent_practice.prompty")
@@ -341,7 +380,8 @@ async def present_independent_practice(state: StudentState) -> Dict[str, Any]:
                 cpa_phase=current_cpa_phase_value,
                 theme=state.personalized_theme,
                 mastery_level=mastery,
-                subtopics=", ".join(topic.subtopics)
+                subtopics=", ".join(topic.subtopics),
+                previous_context=previous_context  # Add previous context
             )
         else:
             # Fallback a prompt directo si no hay plantilla
@@ -349,21 +389,49 @@ async def present_independent_practice(state: StudentState) -> Dict[str, Any]:
             Nivel de dominio actual: {mastery:.2f}, Fase: {current_cpa_phase_value}
             Tema de personalización: {state.personalized_theme}
             
+            {previous_context}
+            
             El problema debe ser levemente más difícil que su nivel actual.
             Incluye al final la solución esperada en formato:
-            SOLUCIÓN: [respuesta correcta]"""
+            ===SOLUTION FOR EVALUATION===
+            [solución detallada]
+            
+            Asegúrate de que la respuesta numérica final aparezca claramente, por ejemplo: 
+            "La respuesta es 10 space rocks" o "El resultado es 15 objetos."
+            """
             
             system_message = "Eres un tutor educativo experto que crea problemas matemáticos adaptados al nivel del estudiante."
             practice_content = await invoke_llm(prompt, system_message)
         
-        # Extraer la solución
-        solution_match = re.search(r"SOLUCIÓN:(.+?)$", practice_content, re.DOTALL | re.IGNORECASE)
+        # Extraer la solución (FIXED)
+        solution_match = re.search(r"===SOLUTION FOR EVALUATION===(.*?)$", practice_content, re.DOTALL | re.IGNORECASE)
         if not solution_match:
-            solution_match = re.search(r"Solución:(.+?)$", practice_content, re.DOTALL | re.IGNORECASE)
+            # Try alternative formats that might be used
+            solution_match = re.search(r"SOLUCIÓN:(.+?)$", practice_content, re.DOTALL | re.IGNORECASE)
             
-        solution_text = solution_match.group(1).strip() if solution_match else "5" # Valor predeterminado
+        # Extract the actual answer from the solution text
+        if solution_match:
+            full_solution = solution_match.group(1).strip()
+            # Try to extract just the final answer number from the solution text
+            answer_match = re.search(r"(?:answer|final answer|result|answer is)[:\s]*(\d+)\s*(?:space rocks|boxes|moon rocks|objects|items)?", full_solution, re.IGNORECASE)
+            if answer_match:
+                solution_text = answer_match.group(1).strip()
+            else:
+                # Fall back to a simpler pattern looking for a number near the end
+                answer_match = re.search(r"(\d+)\s*(?:space rocks|boxes|moon rocks|objects|items)(?:\s*(?:left|remaining|in total|altogether|in all))?", full_solution, re.IGNORECASE)
+                if answer_match:
+                    solution_text = answer_match.group(1).strip()
+                else:
+                    # If still no match, use the full solution
+                    solution_text = full_solution
+        else:
+            solution_text = "No Solution Found"
+            print(f"WARNING: Could not extract solution from independent practice content")
         
-        # Eliminar la solución del texto del problema para mostrar al estudiante
+        # Debug logging
+        print(f"Extracted solution: '{solution_text}' from independent practice")
+        
+        # Remove the solution from what's shown to the student
         problem_text = practice_content
         if solution_match:
             problem_text = practice_content.replace(solution_match.group(0), "").strip()
@@ -400,6 +468,8 @@ async def present_independent_practice(state: StudentState) -> Dict[str, Any]:
         
     except Exception as e:
         print(f"Error en present_independent_practice: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "action": "error",
             "error": str(e),
@@ -424,7 +494,6 @@ async def evaluate_answer(state: StudentState, user_answer: str) -> Dict[str, An
     problem = state.last_problem_details
     problem_text = problem.get("problem", "")
     expected_solution = problem.get("solution", "")
-    problem_type = problem.get("type", "unknown")
     
     try:
         # Construir ruta a la plantilla de evaluación
@@ -447,23 +516,51 @@ async def evaluate_answer(state: StudentState, user_answer: str) -> Dict[str, An
             Respuesta del estudiante: {user_answer}
             
             Evalúa si la respuesta es CORRECT, INCORRECT_CONCEPTUAL o INCORRECT_CALCULATION.
-            Responde solo con uno de estos valores."""
+            IMPORTANTE: Inicia tu respuesta con exactamente "[EVALUATION: X]" donde X es uno de:
+            CORRECT, INCORRECT_CONCEPTUAL, INCORRECT_CALCULATION, UNCLEAR.
+            """
             
             system_message = "Eres un tutor educativo experto que evalúa respuestas matemáticas con precisión."
             evaluation_result_str = await invoke_llm(prompt, system_message)
         
-        # Procesar el resultado
+        # Procesar el resultado usando regex para encontrar el tag específico
+        import re
         evaluation_result_str = evaluation_result_str.strip().upper()
         
-        # Mapear a enum
-        if "CORRECT" in evaluation_result_str:
-            evaluation_result = EvaluationOutcome.CORRECT
-        elif "CONCEPTUAL" in evaluation_result_str:
-            evaluation_result = EvaluationOutcome.INCORRECT_CONCEPTUAL
-        elif "CALCULATION" in evaluation_result_str:
-            evaluation_result = EvaluationOutcome.INCORRECT_CALCULATION
+        # Buscar el formato específico [EVALUATION: X]
+        eval_pattern = r"\[EVALUATION:\s*(CORRECT|INCORRECT_CONCEPTUAL|INCORRECT_CALCULATION|UNCLEAR)\]"
+        match = re.search(eval_pattern, evaluation_result_str, re.IGNORECASE)
+        
+        if match:
+            # Extraer el resultado exacto del tag
+            result_type = match.group(1).upper()
+            if result_type == "CORRECT":
+                evaluation_result = EvaluationOutcome.CORRECT
+            elif result_type == "INCORRECT_CONCEPTUAL":
+                evaluation_result = EvaluationOutcome.INCORRECT_CONCEPTUAL
+            elif result_type == "INCORRECT_CALCULATION":
+                evaluation_result = EvaluationOutcome.INCORRECT_CALCULATION
+            else:
+                evaluation_result = EvaluationOutcome.UNCLEAR
         else:
-            evaluation_result = EvaluationOutcome.UNCLEAR
+            # Fallback: comparación directa con la solución esperada
+            # Limpiamos ambas cadenas para una comparación más robusta
+            clean_solution = re.sub(r'\s+', '', expected_solution).lower()
+            clean_answer = re.sub(r'\s+', '', user_answer).lower()
+            
+            if clean_answer == clean_solution:
+                evaluation_result = EvaluationOutcome.CORRECT
+                print(f"Fallback evaluation: direct comparison matched solution")
+            elif "INCORRECT_CONCEPTUAL" in evaluation_result_str:
+                evaluation_result = EvaluationOutcome.INCORRECT_CONCEPTUAL
+            elif "INCORRECT_CALCULATION" in evaluation_result_str:
+                evaluation_result = EvaluationOutcome.INCORRECT_CALCULATION
+            else:
+                # Si no podemos determinar claramente, asumimos error de cálculo
+                print(f"WARNING: Couldn't parse evaluation result: '{evaluation_result_str}'")
+                evaluation_result = EvaluationOutcome.INCORRECT_CALCULATION
+        
+        print(f"Evaluation determined: {evaluation_result.value} for answer '{user_answer}' (expected: {expected_solution})")
         
         # Actualizar métricas de dominio
         old_mastery = state.topic_mastery.get(state.current_topic, 0.0)
@@ -513,6 +610,8 @@ async def evaluate_answer(state: StudentState, user_answer: str) -> Dict[str, An
         
     except Exception as e:
         print(f"Error en evaluate_answer: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "action": "error",
             "error": str(e),

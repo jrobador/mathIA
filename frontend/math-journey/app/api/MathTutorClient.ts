@@ -18,8 +18,8 @@ import {
 } from "@/types/api"; // Adjust path if needed
 
 // Configuración API por defecto
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+const API_BASE_URL = 
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
 
 class MathTutorClient {
   private baseUrl: string;
@@ -760,6 +760,37 @@ class MathTutorClient {
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data as string);
+            
+            // Add URL normalization here for any agent response
+            if (data.type === "agent_response" && data.data) {
+              // Check if the data contains image or audio URLs that need normalization
+              if (data.data.image_url || data.data.audio_url) {
+                console.log("Before URL normalization:", {
+                  image: data.data.image_url, 
+                  audio: data.data.audio_url
+                });
+                
+                // Normalize URLs directly in the data
+                if (data.data.image_url && typeof data.data.image_url === 'string' && data.data.image_url.startsWith('/')) {
+                  const backendUrl = "http://127.0.0.1:8000"; // Hardcode for testing
+                  const base = backendUrl.endsWith('/') ? backendUrl.slice(0, -1) : backendUrl;
+                  data.data.image_url = `${base}${data.data.image_url}`;
+                }
+                
+                if (data.data.audio_url && typeof data.data.audio_url === 'string' && data.data.audio_url.startsWith('/')) {
+                  const backendUrl = "http://127.0.0.1:8000"; // Hardcode for testing
+                  const base = backendUrl.endsWith('/') ? backendUrl.slice(0, -1) : backendUrl;
+                  data.data.audio_url = `${base}${data.data.audio_url}`;
+                }
+                
+                console.log("After URL normalization:", {
+                  image: data.data.image_url, 
+                  audio: data.data.audio_url
+                });
+              }
+            }
+            
+            // Continue with the existing logging
             console.log("DETAILED: WebSocket message received:", {
               type: data.type,
               requestId: data.requestId,
@@ -863,11 +894,6 @@ class MathTutorClient {
           } catch (error) {
             console.error("Error parsing message on session WebSocket:", error);
           }
-        };
-
-        ws.onerror = (event) => {
-          console.error(`WebSocket error on session ${this.currentSessionId}:`, event);
-          // The onclose event will handle reconnection logic
         };
 
         ws.onclose = (event) => {
@@ -1035,18 +1061,26 @@ class MathTutorClient {
   private _normalizeContentUrls(agentOutput: AgentOutput | null): void {
     if (!agentOutput) return;
     try {
-        const makeAbsolute = (url: string | null | undefined): string | null | undefined => {
-            if (url && typeof url === 'string' && url.startsWith('/')) {
-                // Ensure no double slashes if baseUrl already ends with one
-                const base = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
-                return `${base}${url}`;
-            }
-            return url;
-        };
-
-        agentOutput.image_url = makeAbsolute(agentOutput.image_url);
-        agentOutput.audio_url = makeAbsolute(agentOutput.audio_url);
-
+      console.log("Before URL normalization in method:", 
+        {image: agentOutput.image_url, audio: agentOutput.audio_url});
+        
+      const makeAbsolute = (url: string | null | undefined): string | null | undefined => {
+        if (url && typeof url === 'string' && url.startsWith('/')) {
+          // Force use http://127.0.0.1:8000 for local development
+          const backendUrl = "http://127.0.0.1:8000"; // Hardcode for testing
+          const base = backendUrl.endsWith('/') ? backendUrl.slice(0, -1) : backendUrl;
+          const absoluteUrl = `${base}${url}`;
+          console.log(`Converting ${url} → ${absoluteUrl}`);
+          return absoluteUrl;
+        }
+        return url;
+      };
+  
+      agentOutput.image_url = makeAbsolute(agentOutput.image_url);
+      agentOutput.audio_url = makeAbsolute(agentOutput.audio_url);
+      
+      console.log("After URL normalization in method:", 
+        {image: agentOutput.image_url, audio: agentOutput.audio_url});
     } catch (error) {
       console.warn("Failed to normalize content URLs:", error);
     }
