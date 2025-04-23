@@ -400,15 +400,17 @@ def save_base64_image(b64_data: str, prompt: str) -> Optional[str]:
 
 # Constantes para Speech
 AUDIO_FORMAT = "audio-16khz-128kbitrate-mono-mp3"
-VOICE_NAME = "en-US-Emma2:DragonHDLatestNeural"
+VOICE_NAME = "en-US-SaraNeural"
 
-async def generate_speech(text: str, voice_name: str = VOICE_NAME) -> Optional[str]:
+async def generate_speech(text: str, voice_name: str = VOICE_NAME, style: str = None, style_degree: int = 1) -> Optional[str]:
     """
     Genera audio de voz a partir de texto usando Azure Speech Service.
 
     Args:
         text: Contenido de texto a convertir a voz
-        voice_name: Voz a usar para la síntesis (por defecto voz de Elvira)
+        voice_name: Voz a usar para la síntesis (por defecto voz de Sara)
+        style: Estilo de voz a aplicar (ej. "cheerful", "sad", "angry", etc.)
+        style_degree: Intensidad del estilo (1-2)
 
     Returns:
         URL al archivo de audio generado, o None si la generación falló
@@ -439,15 +441,18 @@ async def generate_speech(text: str, voice_name: str = VOICE_NAME) -> Optional[s
             f.write(b'Mock audio data for testing')
     
     # Imprimir información de depuración
-    print(f"MOCK: Generated new audio with URL: /static/audio/{filename}")
+    style_info = f" (Style: {style})" if style else ""
+    print(f"MOCK: Generated new audio with URL: /static/audio/{filename}{style_info}")
     print(f"MOCK: Text beginning: {text[:50]}...")
     
     # Devolver URL relativa
     relative_url = f"/static/audio/{filename}"
     return relative_url
 
+# Modificar synthesize_speech para pasar el estilo al SSML
 def synthesize_speech(text: str, output_path: str, voice_name: str,
-                     speech_key: str, service_region: str) -> bool:
+                     speech_key: str, service_region: str, 
+                     style: str = None, style_degree: int = 1) -> bool:
     """
     Realiza la síntesis de voz usando Azure Speech SDK.
 
@@ -457,6 +462,8 @@ def synthesize_speech(text: str, output_path: str, voice_name: str,
         voice_name: Voz a usar
         speech_key: Clave de suscripción de Azure Speech
         service_region: Región del servicio Azure Speech
+        style: Estilo de voz a aplicar (ej. "cheerful", "sad", "angry", etc.)
+        style_degree: Intensidad del estilo (1-2)
 
     Returns:
         True si la síntesis fue exitosa, False en caso contrario
@@ -478,17 +485,17 @@ def synthesize_speech(text: str, output_path: str, voice_name: str,
         audio_config=audio_config
     )
 
-    # Comprobar si deberíamos usar SSML para mejor pronunciación
-    use_ssml = should_use_ssml(text)
+    # Siempre usar SSML cuando se especifica un estilo
+    use_ssml = style is not None or should_use_ssml(text)
 
     # Iniciar síntesis
     if use_ssml:
         # Envolver el texto en SSML para mejor control sobre la síntesis de voz
-        ssml = create_ssml(text, voice_name)  # create_ssml recibe texto limpio
+        ssml = create_ssml(text, voice_name, style, style_degree)
         result = speech_synthesizer.speak_ssml_async(ssml).get()
     else:
         # Usar síntesis de texto plano para contenido simple
-        result = speech_synthesizer.speak_text_async(text).get()  # speak_text_async recibe texto limpio
+        result = speech_synthesizer.speak_text_async(text).get()
 
     # Comprobar el resultado
     if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
@@ -525,13 +532,15 @@ def should_use_ssml(text: str) -> bool:
     result = has_math_expressions or is_long_text
     return result
 
-def create_ssml(text: str, voice_name: str) -> str:
+def create_ssml(text: str, voice_name: str, style: str = "calm", style_degree: int = 1) -> str:
     """
-    Crea marcado SSML para el texto proporcionado.
+    Crea marcado SSML para el texto proporcionado, con soporte para estilos de voz.
 
     Args:
         text: Texto a envolver en SSML (ya limpio)
         voice_name: Voz a usar
+        style: Estilo de voz a aplicar (ej. "cheerful", "sad", "angry", etc.)
+        style_degree: Intensidad del estilo (1-2)
 
     Returns:
         Cadena SSML formateada correctamente
@@ -552,17 +561,30 @@ def create_ssml(text: str, voice_name: str) -> str:
     text = re.sub(decimal_pattern, r'<say-as interpret-as="cardinal">\1</say-as>', text)
 
     # Crear el documento SSML completo
-    # Nota: Adaptado para español si la voz es española
-    lang = "es-ES" if "es-ES" in voice_name else "en-US"
+    lang = "en-US"
     
-    ssml = f"""
-    <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{lang}">
-        <voice name="{voice_name}">
-            <prosody rate="1.05" pitch="+0%">
-                {text}
-            </prosody>
-        </voice>
-    </speak>
-    """
+    # Construir el SSML, incluyendo el namespace mstts si se proporciona un estilo
+    if style:
+        ssml = f"""
+        <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="{lang}">
+            <voice name="{voice_name}">
+                <mstts:express-as style="{style.lower()}" styledegree="{style_degree}">
+                    <prosody rate="0.95" pitch="+0%">
+                        {text}
+                    </prosody>
+                </mstts:express-as>
+            </voice>
+        </speak>
+        """
+    else:
+        ssml = f"""
+        <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{lang}">
+            <voice name="{voice_name}">
+                <prosody rate="1.05" pitch="+0%">
+                    {text}
+                </prosody>
+            </voice>
+        </speak>
+        """
 
     return ssml.strip()
