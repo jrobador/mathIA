@@ -2,23 +2,24 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import MathTutorClient from "@/app/api/MathTutorClient"; // Adjust path if needed
-// Import WebSocketMessage if defined in types/api, otherwise use a local definition
-import { AgentOutput, DiagnosticQuestionResult, WebSocketMessage } from "@/types/api"; // Adjust path if needed
+import MathTutorClient from "@/app/api/MathTutorClient"; 
+import { 
+  AgentOutput, 
+  DiagnosticQuestionResult as ApiDiagnosticQuestionResult, 
+  // Renamed to avoid conflict with local type
+  WebSocketMessage 
+} from "@/types/api"; 
+
+interface StartSessionOptions {
+  personalized_theme?: string;        // Backend property name
+  learning_path?: string;             // Backend property name
+  diagnostic_results?: ApiDiagnosticQuestionResult[]; // Using the imported type
+}
 
 interface UseMathTutorOptions {
   autoConnect?: boolean;
   // maxRetries?: number; // Removed as unused
 }
-
-// Re-defined here for clarity, ensure it matches the one used in TutorContext
-interface StartSessionOptions {
-  personalized_theme?: string;
-  // initial_message?: string; // Removed as unused by client/backend currently
-  learning_path?: string;
-  diagnostic_results?: DiagnosticQuestionResult[]; // Keep if needed for future logic, though unused in start call
-}
-
 
 interface UseMathTutorReturn {
   client: MathTutorClient;
@@ -146,37 +147,32 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       if (isProcessing || sessionRequestPendingRef.current) { return; }
       // Use client method here (assuming it exists)
       if ((client.getCurrentSessionId() || sessionStartedRef.current) && !isRecovering) { return; }
-
+  
       sessionRequestPendingRef.current = true;
       setIsProcessing(true);
       setError(null);
-
+  
       try {
-        // REMOVED unused variables: initial_message, diagnostic_results
-        const { personalized_theme, learning_path } = options;
-
+        const { personalized_theme, learning_path, diagnostic_results } = options;
+  
         console.log(`useMathTutor: Calling client.startSession... ${isRecovering ? "(recovery mode)" : ""}`);
-
-        // REMOVED unused variable: formattedDiagnostic
-        // const formattedDiagnostic = diagnostic_results
-        //   ? client.formatDiagnosticResults(diagnostic_results)
-        //   : null;
-
+  
+        // No transformation needed - pass directly to client with correct property names
         const response = await client.startSession({
           personalized_theme,
           learning_path,
-          // diagnostic_results: formattedDiagnostic, // Removed
+          diagnostic_results  // Pass directly with correct property name
         });
-
+  
         setSessionId(response.session_id);
         setAgentOutput(response.initial_output);
         sessionStartedRef.current = true;
-
+  
         if (isRecovering) { setIsRecovering(false); }
         console.log("useMathTutor: Session started successfully:", response.session_id);
-
+  
       } catch (err) {
-         const error = err as Error;
+        const error = err as Error;
         setError(error);
         console.error("useMathTutor: Error starting session:", error);
         sessionStartedRef.current = false;
@@ -188,8 +184,7 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
         sessionRequestPendingRef.current = false;
       }
     },
-    // Dependencies: client is stable, isProcessing changes, isRecovering changes
-    [client, isProcessing, isRecovering, resetState] // Added resetState just in case error logic uses it implicitly
+    [client, isProcessing, isRecovering, resetState]
   );
 
 
@@ -289,19 +284,19 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
   // === Effects for Auto-Connect and Cleanup ===
 
   useEffect(() => {
-     // Use client method here (assuming it exists)
+    // Use client method here (assuming it exists)
     if (autoConnect && !client.hasActiveSession() && !isProcessing && !autoConnectPerformedRef.current && !sessionRequestPendingRef.current) {
       const autoInitialize = async () => {
         console.log("useMathTutor: Auto-connecting session...");
         autoConnectPerformedRef.current = true;
-
+  
         const theme = localStorage.getItem("learningTheme") || "space";
         const path = localStorage.getItem("learningPath") || "addition";
-
+  
         await startSession({
           personalized_theme: theme,
           learning_path: path,
-          // diagnostic_results not needed here
+          // diagnostic_results not needed here for auto-connect
         });
       };
       autoInitialize();

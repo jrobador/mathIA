@@ -2,16 +2,15 @@
 "use client";
 
 import React, { JSX, createContext, useContext, useState, useEffect, ReactNode, useCallback } from "react"; // Added useCallback
-import { useMathTutor } from "@/hooks/use-math-tutor"; // Adjust path if needed
+import { useMathTutor } from "@/hooks/use-math-tutor";
+import { AgentOutput} from "@/types/api";
 
-// Define interfaces directly or import from a shared types file
-interface AgentOutput {
-  text?: string;
-  image_url?: string | null;
-  audio_url?: string | null;
-  evaluation?: string | null;
-  prompt_for_answer?: boolean;
-  is_final_step?: boolean;
+
+export interface StartSessionOptions {
+  theme?: string;              // Frontend property
+  learningPath?: string;       // Frontend property
+  initialMessage?: string;     // For UI display only
+  diagnosticResults?: any[];   // Type appropriately for diagnostic results
 }
 
 export enum MessageType {
@@ -38,14 +37,6 @@ export interface Message {
   isEvaluation?: boolean;
   evaluationType?: string | null;
   isCorrect?: boolean;
-}
-
-// Interface for options when starting a session *from a component*
-export interface StartSessionOptions {
-  theme?: string;
-  learningPath?: string;
-  initialMessage?: string; // Keep for displaying initial user message in UI
-  diagnosticResults?: any[]; // Type appropriately if possible
 }
 
 // Interface defining the context's value
@@ -127,19 +118,18 @@ export function TutorProvider({ children }: TutorProviderProps): JSX.Element {
   const startSession = useCallback(async (options: StartSessionOptions = {}): Promise<void> => {
     setMessages([]); // Clear previous messages
     addMessage(MessageType.SYSTEM, "Welcome to your learning session! I'm here to help.");
-
+  
     // Add the initial user message to the UI if provided
     if (options.initialMessage) {
       addMessage(MessageType.USER, options.initialMessage);
     }
-
+  
     // Call the hook's start session function
     await startTutorSession({
       // Map options from UI/component call to options expected by the hook
       personalized_theme: options.theme,
       learning_path: options.learningPath,
-      // initial_message: options.initialMessage, // REMOVED - Hook doesn't use it
-      diagnostic_results: options.diagnosticResults,
+      diagnostic_results: options.diagnosticResults // Pass the diagnostic results to the hook
     });
   }, [addMessage, startTutorSession]); // Dependencies
 

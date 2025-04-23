@@ -280,19 +280,35 @@ async def websocket_new_session_endpoint(websocket: WebSocket):
             user_id = data_payload.get("user_id") # Optional
             initial_mastery_str = data_payload.get("initial_mastery", "0.0")
             personalized_theme = data_payload.get("personalized_theme", "space")
-
+            
+            # NEW: Support for diagnostic results
+            diagnostic_results = data_payload.get("diagnostic_results")
+            
             # Safely convert initial_mastery to float
             try:
                 initial_mastery = float(initial_mastery_str)
                 if not (0.0 <= initial_mastery <= 1.0):
                     raise ValueError("Initial mastery must be between 0.0 and 1.0")
             except (ValueError, TypeError):
-                 print(f"Invalid initial_mastery value received: {initial_mastery_str}. Defaulting to 0.0.")
-                 initial_mastery = 0.0
-                 # Optionally send an error back? Or just proceed with default?
-                 # await send_json_to_websocket(websocket, {"type": "error", "message": "Invalid initial_mastery value.", "requestId": request_id})
-                 # return # Exit if invalid value is critical
-
+                print(f"Invalid initial_mastery value received: {initial_mastery_str}. Defaulting to 0.0.")
+                initial_mastery = 0.0
+            
+            # NEW: Process diagnostic results if provided
+            if diagnostic_results and isinstance(diagnostic_results, list) and len(diagnostic_results) > 0:
+                try:
+                    # Simple calculation: percentage of correct answers
+                    total_questions = len(diagnostic_results)
+                    correct_answers = sum(1 for result in diagnostic_results if result.get('correct', False))
+                    
+                    if total_questions > 0:
+                        # Scale the calculated mastery between 0.1 and 0.8 to leave room for improvement
+                        calculated_mastery = 0.1 + (0.7 * (correct_answers / total_questions))
+                        initial_mastery = calculated_mastery
+                        print(f"WS: Calculated initial mastery from diagnostics: {initial_mastery:.2f} ({correct_answers}/{total_questions} correct)")
+                except Exception as e:
+                    print(f"Error processing diagnostic results: {e}")
+                    # Continue with default or provided initial_mastery if there's an error
+            
             try:
                 # Call agent method to create the session
                 session_response = await learning_agent.create_session(
@@ -314,10 +330,9 @@ async def websocket_new_session_endpoint(websocket: WebSocket):
                 print(f"ValueError during session creation: {e}")
                 await send_json_to_websocket(websocket, {"type": "error", "message": str(e), "requestId": request_id})
             except Exception as e: # Catch unexpected errors during session creation
-                 print(f"Exception during session creation:")
-                 traceback.print_exc()
-                 await send_json_to_websocket(websocket, {"type": "error", "message": f"Error creating session: {str(e)}", "requestId": request_id})
-
+                print(f"Exception during session creation:")
+                traceback.print_exc()
+                await send_json_to_websocket(websocket, {"type": "error", "message": f"Error creating session: {str(e)}", "requestId": request_id})
 
         elif action == "get_roadmaps":
             # Get available learning roadmaps from the agent

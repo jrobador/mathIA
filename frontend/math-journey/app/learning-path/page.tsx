@@ -14,7 +14,6 @@ export default function LearningPathPage() {
 
   // States
   const [isAudioPlaying, setIsAudioPlaying] = useState(false)
-  const [isAudioComplete, setIsAudioComplete] = useState(false)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [studentName, setStudentName] = useState("")
   const [studentLevel, setStudentLevel] = useState("")
@@ -42,7 +41,8 @@ export default function LearningPathPage() {
     const audio = audioRef.current
     
     const handleEnded = () => {
-      setIsAudioComplete(true)
+      // Instead of using isAudioComplete state, we could just set playing to false
+      // setIsAudioComplete(true)
       setIsAudioPlaying(false)
     }
     
@@ -56,25 +56,39 @@ export default function LearningPathPage() {
 
   const handlePathSelect = async (path: string) => {
     setSelectedPath(path)
-
+  
     // Store selected path
     localStorage.setItem("learningPath", path)
-
+  
     try {
-      // Pre-initialize session
+      // Pre-initialize session with diagnostic results
       const diagnosticResultsJson = localStorage.getItem("diagnosticResults")
-      const diagnosticResults = diagnosticResultsJson ? JSON.parse(diagnosticResultsJson) : null
-
+      let diagnosticResults = null
+      
+      // Parse diagnostic results if available
+      if (diagnosticResultsJson) {
+        try {
+          const parsedResults = JSON.parse(diagnosticResultsJson)
+          // Only extract the question_results array which contains what the API expects
+          diagnosticResults = parsedResults.question_results || null
+          console.log("Using diagnostic results:", diagnosticResults)
+        } catch (e) {
+          console.error("Error parsing diagnostic results:", e)
+          // Continue without diagnostic results
+        }
+      }
+  
       // Start session in background while navigating
+      // Use the correct property names that match the StartSessionOptions interface
       startSession({
         learning_path: path,
         diagnostic_results: diagnosticResults,
-        initial_message: `Hi, I'm ${studentName}. I want to learn ${path}.`
+        // Remove initialMessage or initial_message if it's not in the interface
       }).catch((error: unknown) => {
         console.error("Error starting session:", error)
         // No need to show toast here, since we're navigating away
       })
-
+  
       // Navigate to theme selection
       router.push("/theme")
     } catch (error) {

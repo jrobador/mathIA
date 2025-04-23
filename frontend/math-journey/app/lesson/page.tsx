@@ -60,40 +60,39 @@ export default function LessonPage() {
 
   // Handle tutor error state changes
   useEffect(() => {
-    if (tutorError) {
-      console.error("Tutor error:", tutorError);
-      setErrorState({
-        isError: true,
-        message: tutorError.message || "An error occurred with the tutoring session."
-      });
-      toast.error(tutorError.message || "Session Error"); // Use toast for errors
-    } else {
-        // Clear error if context error is cleared
-        setErrorState({ isError: false, message: "" });
-    }
-  }, [tutorError]);
-
- // Auto start session when component mounts
-  useEffect(() => {
     const initializeSession = async () => {
       // Check conditions more carefully
       if (sessionId || sessionStartAttemptedRef.current || isTutorLoading || !userInfoLoadedRef.current || !learningPath) {
         return;
       }
-
+  
       try {
         sessionStartAttemptedRef.current = true; // Mark attempt
         // setIsLocalLoading(true); // Context isLoading should handle this
         console.log("Attempting to start new tutoring session...");
-
+  
+        // Get diagnostic results from localStorage to initialize the session properly
         const diagnosticResultsJson = localStorage.getItem("diagnosticResults");
-        const diagnosticResults = diagnosticResultsJson ? JSON.parse(diagnosticResultsJson) : null;
-
+        let diagnosticResults = null;
+        
+        // Parse diagnostic results if available
+        if (diagnosticResultsJson) {
+          try {
+            const parsedResults = JSON.parse(diagnosticResultsJson);
+            // Extract the question_results array which contains what the API expects
+            diagnosticResults = parsedResults.question_results || [];
+            console.log("Using diagnostic results:", diagnosticResults);
+          } catch (e) {
+            console.error("Error parsing diagnostic results:", e);
+            // Continue without diagnostic results
+          }
+        }
+  
         await startSession({
           theme: learningTheme,
           learningPath: learningPath,
           initialMessage: `Hi, I'm ${studentName}. Let's start learning ${learningPath}!`,
-          diagnosticResults: diagnosticResults?.question_results,
+          diagnosticResults: diagnosticResults,
         });
         console.log("Context startSession called.");
       } catch (error) {
@@ -108,7 +107,7 @@ export default function LessonPage() {
         // setIsLocalLoading(false); // Context isLoading handles this
       }
     };
-
+  
     // Trigger session start only when user info is loaded
     if (userInfoLoadedRef.current) {
       initializeSession();

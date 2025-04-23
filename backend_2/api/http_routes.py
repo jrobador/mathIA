@@ -4,42 +4,66 @@ from pydantic import BaseModel, Field
 
 router = APIRouter()
 
+class DiagnosticQuestionResult(BaseModel):
+    """Model for a single diagnostic question result"""
+    question_id: str
+    correct: bool
+    concept_tested: Optional[str] = None
+
 class StartSessionRequest(BaseModel):
-    """Modelo de petición para iniciar una nueva sesión"""
+    """Model for session start request with diagnostic results support"""
     topic_id: str = Field("fractions_introduction", description="ID del tema a estudiar")
     user_id: Optional[str] = Field(None, description="ID del usuario (opcional)")
     initial_mastery: float = Field(0.0, ge=0.0, le=1.0, description="Nivel inicial de dominio")
     personalized_theme: str = Field("space", description="Tema de personalización (espacio, océano, etc.)")
+    diagnostic_results: Optional[List[DiagnosticQuestionResult]] = Field(None, description="Resultados del diagnóstico")
 
 class SessionResponse(BaseModel):
-    """Modelo de respuesta con información de la sesión"""
+    """Response model with session information"""
     session_id: str
     topic_id: str
     result: Dict[str, Any]
     requires_input: bool
 
 class SubmitAnswerRequest(BaseModel):
-    """Modelo de petición para enviar una respuesta del usuario"""
+    """Model for submitting a user answer"""
     answer: str = Field(..., description="Respuesta del usuario")
 
 @router.post("/api/sessions", response_model=SessionResponse)
 async def create_session(request: Request, body: StartSessionRequest = Body(...)):
     """
-    Crea una nueva sesión de aprendizaje
+    Creates a new learning session, now with diagnostic results support
     """
-    # Obtener el agente de aprendizaje
+    # Get the learning agent
     learning_agent = request.app.state.learning_agent
     
     try:
-        # Crear sesión
-        session_id, result = await learning_agent.create_session(
+        # Calculate initial mastery based on diagnostic results if provided
+        initial_mastery = body.initial_mastery
+        
+        if body.diagnostic_results:
+            # Simple calculation: percentage of correct answers
+            total_questions = len(body.diagnostic_results)
+            correct_answers = sum(1 for result in body.diagnostic_results if result.correct)
+            
+            if total_questions > 0:
+                # Scale the calculated mastery between 0.1 and 0.8 to leave room for improvement
+                calculated_mastery = 0.1 + (0.7 * (correct_answers / total_questions))
+                initial_mastery = calculated_mastery
+                print(f"Calculated initial mastery from diagnostics: {initial_mastery:.2f} ({correct_answers}/{total_questions} correct)")
+
+        # Create session
+        session_result = await learning_agent.create_session(
             topic_id=body.topic_id,
             personalized_theme=body.personalized_theme,
-            initial_mastery=body.initial_mastery,
+            initial_mastery=initial_mastery,
             user_id=body.user_id
         )
         
-        # Determinar si requiere input
+        session_id = session_result.get("session_id")
+        result = session_result.get("initial_result", {})
+        
+        # Determine if input is required
         requires_input = result.get("waiting_for_input", False)
         
         return SessionResponse(
@@ -53,8 +77,9 @@ async def create_session(request: Request, body: StartSessionRequest = Body(...)
         raise HTTPException(status_code=400, detail=str(e))
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al crear la sesión: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error creating session: {str(e)}")
 
+# Rest of the file remains unchanged
 @router.post("/api/sessions/{session_id}/answer", response_model=Dict[str, Any])
 async def submit_answer(
     request: Request,

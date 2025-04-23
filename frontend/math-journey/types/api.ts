@@ -1,6 +1,8 @@
+// Add or update the types in types/api.ts to ensure consistency
+
 /**
  * Tipos para la API del Tutor Matemático
- * Actualizados para soportar la nueva funcionalidad WebSocket
+ * Actualizados para soportar la nueva funcionalidad WebSocket y diagnóstico
  */
 
 // Enumeración para resultados de evaluación
@@ -28,10 +30,10 @@ export interface MathTutorClientConfig {
 // Opciones para iniciar sesión
 export interface StartSessionOptions {
   personalized_theme?: string;
-  initial_message?: string | null;
-  config?: SessionConfig | null;
-  diagnostic_results?: DiagnosticResults | null;
   learning_path?: string | null;
+  config?: SessionConfig | null;
+  diagnostic_results?: DiagnosticQuestionResult[] | null;
+  initial_message?: string | null;
 }
 
 // Respuesta de inicio de sesión
