@@ -11,6 +11,14 @@ export enum EvaluationResult {
   UNCLEAR = "Unclear"
 }
 
+// Enumeración para niveles de dificultad
+export enum DifficultySetting {
+  INITIAL = "initial",
+  BEGINNER = "beginner",
+  INTERMEDIATE = "intermediate",
+  ADVANCED = "advanced"
+}
+
 // Configuración del Cliente API
 export interface MathTutorClientConfig {
   baseUrl?: string;

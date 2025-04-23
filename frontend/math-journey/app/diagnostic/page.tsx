@@ -131,7 +131,9 @@ export default function DiagnosticPage() {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [answer, setAnswer] = useState("")
   const [isAudioPlaying, setIsAudioPlaying] = useState(false)
-  const [isAudioComplete, setIsAudioComplete] = useState(false)
+  // Either use isAudioComplete or remove it if not needed
+  // Option 1: Use it in the component to enable/disable buttons
+  const [audioReady, setAudioReady] = useState(false) // Renamed to more descriptive name
   const [showFeedback, setShowFeedback] = useState(false)
   const [isCorrect, setIsCorrect] = useState(false)
   const [results, setResults] = useState<{ id: number; correct: boolean }[]>([])
@@ -161,7 +163,7 @@ export default function DiagnosticPage() {
     if (isAudioPlaying) {
       const audioDuration = showFeedback ? 3000 : 4000
       const timer = setTimeout(() => {
-        setIsAudioComplete(true)
+        setAudioReady(true) // Use the renamed state variable
         setIsAudioPlaying(false)
       }, audioDuration)
       return () => clearTimeout(timer)
@@ -171,7 +173,7 @@ export default function DiagnosticPage() {
   const handleStartDiagnostic = () => {
     setShowIntro(false)
     setIsAudioPlaying(false)
-    setIsAudioComplete(false)
+    setAudioReady(false) // Reset audio state when starting
   }
 
   const handleSubmit = () => {
@@ -179,6 +181,7 @@ export default function DiagnosticPage() {
     setIsCorrect(isAnswerCorrect);
     setShowFeedback(true);
     setIsAudioPlaying(true); // Play feedback audio
+    setAudioReady(false); // Reset audio ready state
 
     // Store the result for the current question
     const currentResult = { id: currentQuestion.id, correct: isAnswerCorrect };
@@ -190,7 +193,7 @@ export default function DiagnosticPage() {
       setShowFeedback(false);
       setAnswer("");
       setIsAudioPlaying(false);
-      setIsAudioComplete(false);
+      setAudioReady(false); // Reset audio ready state
 
       if (currentQuestionIndex < diagnosticQuestions.length - 1) {
         // Move to the next question
@@ -247,7 +250,7 @@ export default function DiagnosticPage() {
       setAnswer("")
       setShowFeedback(false)
       setIsAudioPlaying(false)
-      setIsAudioComplete(false)
+      setAudioReady(false) // Reset audio ready state
       // Remove the last result if going back means re-answering
       setResults(prev => prev.slice(0, -1));
     }
@@ -256,6 +259,7 @@ export default function DiagnosticPage() {
   const handlePlayAudio = () => {
     if (!showIntro && !diagnosticComplete) {
         setIsAudioPlaying(true)
+        setAudioReady(false) // Reset audio ready when replaying
     }
   }
 
