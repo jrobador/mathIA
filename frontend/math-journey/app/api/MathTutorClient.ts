@@ -34,6 +34,8 @@ class MathTutorClient {
   private reconnectTimeout: number;
   private processingRequest: boolean; // Simple lock to prevent concurrent sends
   private reconnectTimer: ReturnType<typeof setTimeout> | null;
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private heartbeatTimeout = 30000; // 30 seconds
 
   /**
    * Initialize the API client with optional configuration
@@ -360,7 +362,7 @@ class MathTutorClient {
                     this.processingRequest = false; // Unlock on timeout
                     reject(new Error("Tiempo de espera agotado para procesar la entrada."));
                 }
-            }, 30000); // 30 seconds timeout
+            }, 60000);
 
             this.messageCallbacks.set(requestId, (response) => {
                 clearTimeout(timeoutHandle); // Clear timeout on response
@@ -701,42 +703,163 @@ class MathTutorClient {
         const ws = new WebSocket(sessionWsUrl);
         this.wsConnection = ws; // Assign immediately to prevent race conditions
 
-        ws.onopen = () => {
+        ws.onopen = async () => {
           console.log(`WebSocket connection established for session ${this.currentSessionId}`);
-          this.reconnectAttempts = 0; // Reset counter on successful connection
-          // Clear any pending reconnect timer
-           if (this.reconnectTimer) {
-               clearTimeout(this.reconnectTimer);
-               this.reconnectTimer = null;
-           }
-           // Optional: Send a ping or get_state on connect to verify
-           // ws.send(JSON.stringify({ action: "get_state", requestId: uuidv4() }));
+          this.reconnectAttempts = 0;
+
+          // Verify connection with a simple ping-pong
+          try {
+            const verifyId = uuidv4();
+            const verifyPromise = new Promise<boolean>((resolve, reject) => {
+              // Set a timeout for the verification
+              const verifyTimeout = setTimeout(() => {
+                this.messageCallbacks.delete(verifyId);
+                console.warn("Connection verification timed out");
+                resolve(false); // Don't reject, just resolve with false
+              }, 5000);
+
+              // Set up the callback for the pong response
+              this.messageCallbacks.set(verifyId, (response) => {
+                clearTimeout(verifyTimeout);
+                this.messageCallbacks.delete(verifyId);
+                if (response.type === "pong") {
+                  console.log("Connection verified with pong");
+                  resolve(true);
+                } else {
+                  console.warn("Unexpected response type for verification", response.type);
+                  resolve(false);
+                }
+              });
+            });
+
+            // Send the ping
+            if (this.wsConnection?.readyState === WebSocket.OPEN) {
+              this.wsConnection.send(JSON.stringify({
+                action: "ping",
+                timestamp: Date.now(),
+                requestId: verifyId
+              }));
+
+              // Wait for the result
+              const verified = await verifyPromise;
+              if (!verified) {
+                console.warn("Connection verification failed, will attempt reconnect");
+                ws.close(); // Will trigger reconnection logic via onclose
+                return;
+              }
+            }
+
+            // If we get here, verification passed
+            console.log("Connection verified and ready");
+            this._startHeartbeat();
+          } catch (error) {
+            console.error("Error during connection verification:", error);
+          }
         };
 
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data as string);
-            // console.log("Received message on session WebSocket:", data); // Can be verbose
-
-            // --- Message Routing ---
+            console.log("DETAILED: WebSocket message received:", {
+              type: data.type,
+              requestId: data.requestId,
+              callbacksAvailable: Array.from(this.messageCallbacks.keys()),
+              data: data
+            });
+        
+            // Track if this is an agent response that modifies state
+            const isAgentResponse = data.type === "agent_response";
+            const isEvaluationOrPractice = isAgentResponse && 
+              data.data && (
+                data.data.action === "evaluation_result" ||
+                data.data.action === "present_content"
+              );
+        
             // 1. Check if it's a response to a specific request via requestId
             if (data.requestId && this.messageCallbacks.has(data.requestId)) {
+              console.log(`Processing callback for requestId: ${data.requestId}`);
+              
+              // Critical: Save a reference to the callback before potentially removing it
               const callback = this.messageCallbacks.get(data.requestId);
-              // console.log(`Routing message with requestId ${data.requestId} to callback.`);
-              callback?.(data); // Execute the specific callback
-              // Callback should delete itself from the map: this.messageCallbacks.delete(data.requestId);
+              
+              // Call the callback with the data
+              callback?.(data);
+              
+              // Only delete the callback if this is NOT an evaluation response
+              // Evaluation responses are typically followed by next practice problems
+              if (isAgentResponse && data.data?.action === "evaluation_result") {
+                console.log(`Keeping callback for requestId: ${data.requestId} to handle follow-up content`);
+                // Don't delete the callback yet, as we expect more responses with the same ID
+              } else {
+                console.log(`Removing callback for requestId: ${data.requestId} after processing`);
+                this.messageCallbacks.delete(data.requestId);
+              }
+            } 
+            // 2. If it might be related to a submit_answer but missing requestId
+            else if (isAgentResponse && this.processingRequest) {
+              console.log("Received agent_response without requestId during active request, trying to match");
+              
+              // Find pending callbacks (newest first since that's likely the current request)
+              const pendingRequestIds = Array.from(this.messageCallbacks.keys());
+              
+              if (pendingRequestIds.length > 0) {
+                // Start with the newest request ID (typically the current one)
+                const latestRequestId = pendingRequestIds[pendingRequestIds.length - 1];
+                console.log(`Matching to latest pending request: ${latestRequestId}`);
+                const callback = this.messageCallbacks.get(latestRequestId);
+                callback?.(data);
+                
+                // Only delete the callback if this is NOT an evaluation response
+                if (isAgentResponse && data.data?.action === "evaluation_result") {
+                  console.log(`Keeping callback for matched request: ${latestRequestId}`);
+                  // Keep the callback for follow-up messages
+                } else {
+                  console.log(`Removing callback for matched request: ${latestRequestId}`);
+                  this.messageCallbacks.delete(latestRequestId);
+                }
+              }
             }
-            // 2. If not a specific response, treat as a push/broadcast message
+            // 3. If the message is a follow-up to a previous response with same content type
+            else if (isEvaluationOrPractice && Array.from(this.messageCallbacks.keys()).length > 0) {
+              console.log("Trying to route follow-up evaluation/practice message to existing callback");
+              
+              // Get the most recent callback
+              const requestIds = Array.from(this.messageCallbacks.keys());
+              const mostRecentId = requestIds[requestIds.length - 1];
+              
+              if (mostRecentId) {
+                const callback = this.messageCallbacks.get(mostRecentId);
+                console.log(`Routing follow-up to most recent callback: ${mostRecentId}`);
+                callback?.(data);
+                
+                // After a practice problem, we can finally remove the callback
+                if (data.data?.action === "present_content") {
+                  console.log(`Removing callback after practice content: ${mostRecentId}`);
+                  this.messageCallbacks.delete(mostRecentId);
+                }
+              }
+            }
+            // 4. If not a specific response, treat as a push/broadcast message
             else {
-              // console.log("Routing message as broadcast/push to general handlers.");
+              // For all other messages (like pongs), notify general handlers
               this.messageHandlers.forEach((handler) => {
                 try {
-                  handler(data); // Notify all general handlers
+                  handler(data);
                 } catch (handlerError) {
                   console.error("Error executing general message handler:", handlerError);
                 }
               });
             }
+            
+            // After processing all messages, if this was the final practice content
+            // and we're still in processing state, turn it off
+            if (isEvaluationOrPractice && 
+                data.data?.action === "present_content" && 
+                this.processingRequest) {
+              console.log("Request cycle complete, releasing processingRequest lock");
+              this.processingRequest = false;
+            }
+            
           } catch (error) {
             console.error("Error parsing message on session WebSocket:", error);
           }
@@ -803,6 +926,31 @@ class MathTutorClient {
       }
   }
 
+  private _startHeartbeat(): void {
+    // Clear any existing heartbeat
+    this._clearHeartbeat();
+    
+    // Start a new heartbeat interval
+    this.heartbeatInterval = setInterval(() => {
+      if (this.wsConnection?.readyState === WebSocket.OPEN) {
+        console.log("Sending heartbeat ping...");
+        this.wsConnection.send(JSON.stringify({
+          action: "ping",
+          timestamp: Date.now()
+        }));
+      } else {
+        console.log("Connection not open, skipping heartbeat");
+        this._clearHeartbeat(); // Clear if connection is not open
+      }
+    }, this.heartbeatTimeout);
+  }
+  
+  private _clearHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+  }
 
   // --- Session Persistence ---
 
@@ -840,12 +988,13 @@ class MathTutorClient {
         if (savedSessionId && !isSessionExpired) {
           console.log(`Restoring session ID from localStorage: ${savedSessionId}`);
           this.currentSessionId = savedSessionId;
-          // **REMOVED**: this._connectToSessionWebSocket();
-          // Connection will now happen only when explicitly started or potentially verified
+          
+          // Add this line to establish the WebSocket connection:
+          this._connectToSessionWebSocket();
         } else {
           if (savedSessionId) { // Only log/clear if there *was* an ID
-             console.log(`Stored session ${savedSessionId} is expired or invalid. Clearing.`);
-             this._clearSession();
+            console.log(`Stored session ${savedSessionId} is expired or invalid. Clearing.`);
+            this._clearSession();
           }
         }
       } catch (e) {

@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional # Import Optional
 import json
 import uuid
 import traceback # Import traceback for detailed error logging
-
+import asyncio # Import asyncio for sleep and other async operations
 # Import the agent class
 from agents.learning_agent import AdaptiveLearningAgent
 
@@ -17,43 +17,65 @@ active_connections: Dict[str, Dict[str, WebSocket]] = {}
 
 # Helper to send JSON data safely, catching potential connection errors
 async def send_json_to_websocket(websocket: WebSocket, data: Any):
-    """Helper to send JSON data safely."""
-    try:
-        if websocket.client_state == websocket.client_state.CONNECTED:
-            await websocket.send_json(data)
-        else:
-            print(f"Attempted to send to disconnected WebSocket: {websocket.client.host}:{websocket.client.port}")
-    except Exception as e:
-        # Log specific connection errors if possible, but avoid crashing the server
-        print(f"Error sending message to WebSocket ({websocket.client.host}:{websocket.client.port}): {e}")
-        # Consider removing the connection from active_connections here if send fails repeatedly
+    """Helper to send JSON data safely with retries."""
+    max_retries = 2
+    retry_delay = 0.5  # seconds
+    
+    for attempt in range(max_retries + 1):
+        try:
+            if websocket.client_state == websocket.client_state.CONNECTED:
+                await websocket.send_json(data)
+                return True
+            else:
+                print(f"Attempted to send to disconnected WebSocket: {websocket.client.host}:{websocket.client.port}")
+                return False
+        except RuntimeError as e:
+            # Check if it's a "WebSocket is not connected" error
+            if "WebSocket is not connected" in str(e) or "close frame has been sent" in str(e):
+                print(f"WebSocket connection closed during send attempt: {e}")
+                return False
+            # For other runtime errors, retry if not the last attempt
+            if attempt < max_retries:
+                print(f"RuntimeError on send attempt {attempt+1}, retrying: {e}")
+                await asyncio.sleep(retry_delay)
+            else:
+                print(f"Failed to send after {max_retries+1} attempts: {e}")
+                return False
+        except Exception as e:
+            # For unexpected errors, log but don't retry
+            print(f"Error sending message to WebSocket ({websocket.client.host}:{websocket.client.port}): {e}")
+            return False
+    
+    return False
 
 # Helper to send agent responses, including requestId
 async def send_agent_responses(websocket: WebSocket, responses: List[Dict[str, Any]], request_id: Optional[str] = None):
-    """
-    Sends a list of agent responses to the WebSocket client.
-    Includes the original requestId if provided.
-    """
+    """Sends a list of agent responses to the WebSocket client."""
     if not responses:
         print(f"No agent responses to send back (requestId: {request_id}).")
         return
 
-    print(f"Sending {len(responses)} agent response(s) back (requestId: {request_id})...")
+    print(f"DEBUG: Sending {len(responses)} agent response(s) back for requestId: {request_id}")
     for i, response_data in enumerate(responses):
-        # Basic validation of response_data format
-        if not isinstance(response_data, dict):
-            print(f"Warning: Agent response item {i} is not a dict: {type(response_data)}. Skipping.")
-            continue
-
+        print(f"DEBUG: Response {i+1}/{len(responses)} - Action: {response_data.get('action')}, Content Type: {response_data.get('content_type')}")
+        
+        # Check for image reuse
+        if 'image_url' in response_data:
+            print(f"DEBUG: Image URL in response {i+1}: {response_data['image_url']}")
+        
         payload = {
             "type": "agent_response",
-            "data": response_data # The actual content from the agent step
+            "data": response_data,
+            "requestId": request_id  # Make sure requestId is included
         }
-        # Include requestId in the payload if it exists
-        if request_id:
-            payload["requestId"] = request_id
-
+        
+        print(f"DEBUG: Sending payload {i+1} with type: {payload['type']}, requestId: {payload['requestId']}")
         await send_json_to_websocket(websocket, payload)
+        
+        # Add a small delay between messages to help client processing
+        if i < len(responses) - 1:
+            print(f"DEBUG: Adding small delay between messages")
+            await asyncio.sleep(0.1)  # 100ms delay between messages
 
 # Endpoint for handling active learning sessions
 @router.websocket("/ws/session/{session_id}")

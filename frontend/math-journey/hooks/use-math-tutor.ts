@@ -80,6 +80,10 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       console.log("Hook received message:", message);
       setIsProcessing(false); // Turn off loading when ANY message arrives
 
+      if (message.type === "agent_response") {
+        console.log("Agent response data structure:", JSON.stringify(message.data, null, 2));
+      }
+
       if (message.type === "agent_response" && message.data) {
         const agentData = message.data;
         setAgentOutput({

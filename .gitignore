@@ -34,3 +34,6 @@ Thumbs.db
 /backend_2/models/__pycache__
 /backend_2/data/__pycache__
 /backend_2/services/__pycache__
+/backend_2/services/__pycache__
+backend_2/services/__pycache__/azure_service.cpython-312.pyc
+/backend_2/services/__pycache__
