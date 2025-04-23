@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import AudioControls from "@/components/audio-controls"
@@ -14,6 +14,7 @@ export default function GreetingPage() {
   const [isAudioPlaying, setIsAudioPlaying] = useState(false)
   const [isAudioComplete, setIsAudioComplete] = useState(false)
   const [currentTextIndex, setCurrentTextIndex] = useState(0)
+  const audioRef = useRef<HTMLAudioElement>(null)
 
   // Get name from localStorage
   useEffect(() => {
@@ -25,42 +26,62 @@ export default function GreetingPage() {
   useEffect(() => {
     if (studentName) {
       const timer = setTimeout(() => {
-        setIsAudioPlaying(true)
+        if (audioRef.current) {
+          audioRef.current.play()
+          setIsAudioPlaying(true)
+        }
       }, 500)
       return () => clearTimeout(timer)
     }
   }, [studentName])
 
-  // Simulate audio playing and text animation
+  // Handle audio events and text animation
   useEffect(() => {
-    if (isAudioPlaying) {
-      const textAnimation = setInterval(() => {
-        setCurrentTextIndex((prev) => {
-          if (prev < 2) return prev + 1
-          clearInterval(textAnimation)
-          return prev
-        })
-      }, 1500)
-
-      const timer = setTimeout(() => {
-        setIsAudioComplete(true)
-        setIsAudioPlaying(false)
-      }, 4500)
-
-      return () => {
-        clearInterval(textAnimation)
-        clearTimeout(timer)
+    const audio = audioRef.current
+    
+    const handleTimeUpdate = () => {
+      if (audio) {
+        // Divide the audio into sections for text animation
+        const audioDuration = audio.duration
+        const section = audioDuration / 3
+        
+        if (audio.currentTime < section) {
+          setCurrentTextIndex(0)
+        } else if (audio.currentTime < section * 2) {
+          setCurrentTextIndex(1)
+        } else {
+          setCurrentTextIndex(2)
+        }
       }
     }
-  }, [isAudioPlaying])
+    
+    const handleEnded = () => {
+      setIsAudioComplete(true)
+      setIsAudioPlaying(false)
+    }
+    
+    if (audio) {
+      audio.addEventListener('timeupdate', handleTimeUpdate)
+      audio.addEventListener('ended', handleEnded)
+      return () => {
+        audio.removeEventListener('timeupdate', handleTimeUpdate)
+        audio.removeEventListener('ended', handleEnded)
+      }
+    }
+  }, [])
 
   const handleContinue = () => {
     router.push("/diagnostic")
   }
 
   const handlePlayAudio = () => {
-    setCurrentTextIndex(0)
-    setIsAudioPlaying(true)
+    if (audioRef.current) {
+      // Reset text index when replaying
+      setCurrentTextIndex(0)
+      audioRef.current.currentTime = 0
+      audioRef.current.play()
+      setIsAudioPlaying(true)
+    }
   }
 
   const greetingTexts = [`Hey there, ${studentName}!`, "I'm your math tutor.", "Are you ready to start?"]
@@ -76,6 +97,9 @@ export default function GreetingPage() {
           className="w-full h-full object-cover"
         />
       </div>
+
+      {/* Audio element */}
+      <audio ref={audioRef} src="/audios/greeting.mp3" preload="auto" />
 
       <div className="max-w-4xl w-full flex flex-col items-center z-10 bg-white/20 backdrop-blur-lg rounded-3xl p-8 border border-white/40 shadow-xl">
         <ProgressDots totalSteps={6} currentStep={3} />

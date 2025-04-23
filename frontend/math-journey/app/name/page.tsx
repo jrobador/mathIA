@@ -15,28 +15,38 @@ export default function NamePage() {
   const [isAudioPlaying, setIsAudioPlaying] = useState(false)
   const [isAudioComplete, setIsAudioComplete] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const audioRef = useRef<HTMLAudioElement>(null)
 
   // Auto-play audio when page loads
   useEffect(() => {
     const timer = setTimeout(() => {
-      setIsAudioPlaying(true)
+      if (audioRef.current) {
+        audioRef.current.play()
+        setIsAudioPlaying(true)
+      }
     }, 500)
     return () => clearTimeout(timer)
   }, [])
 
-  // Simulate audio playing and completion
+  // Handle audio events
   useEffect(() => {
-    if (isAudioPlaying) {
-      const timer = setTimeout(() => {
-        setIsAudioComplete(true)
-        setIsAudioPlaying(false)
-        if (inputRef.current) {
-          inputRef.current.focus()
-        }
-      }, 2000)
-      return () => clearTimeout(timer)
+    const audio = audioRef.current
+    
+    const handleEnded = () => {
+      setIsAudioComplete(true)
+      setIsAudioPlaying(false)
+      if (inputRef.current) {
+        inputRef.current.focus()
+      }
     }
-  }, [isAudioPlaying])
+    
+    if (audio) {
+      audio.addEventListener('ended', handleEnded)
+      return () => {
+        audio.removeEventListener('ended', handleEnded)
+      }
+    }
+  }, [])
 
   const handleContinue = () => {
     if (name.trim()) {
@@ -47,7 +57,11 @@ export default function NamePage() {
   }
 
   const handlePlayAudio = () => {
-    setIsAudioPlaying(true)
+    if (audioRef.current) {
+      audioRef.current.currentTime = 0
+      audioRef.current.play()
+      setIsAudioPlaying(true)
+    }
   }
 
   return (
@@ -61,6 +75,9 @@ export default function NamePage() {
           className="w-full h-full object-cover"
         />
       </div>
+
+      {/* Audio element */}
+      <audio ref={audioRef} src="/audios/name.mp3" preload="auto" />
 
       <div className="max-w-4xl w-full flex flex-col items-center z-10 bg-white/20 backdrop-blur-lg rounded-3xl p-8 border border-white/40 shadow-xl">
         <ProgressDots totalSteps={6} currentStep={2} />

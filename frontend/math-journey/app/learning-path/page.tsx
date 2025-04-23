@@ -1,8 +1,6 @@
-// math-journey/src/app/learning-path/page.tsx
-
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import AudioControls from "@/components/audio-controls"
 import ProgressDots from "@/components/progress-dots"
@@ -20,6 +18,7 @@ export default function LearningPathPage() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [studentName, setStudentName] = useState("")
   const [studentLevel, setStudentLevel] = useState("")
+  const audioRef = useRef<HTMLAudioElement>(null)
 
   // Get diagnostic data from localStorage to use with API later
   useEffect(() => {
@@ -30,21 +29,30 @@ export default function LearningPathPage() {
   // Auto-play audio when page loads
   useEffect(() => {
     const timer = setTimeout(() => {
-      setIsAudioPlaying(true)
+      if (audioRef.current) {
+        audioRef.current.play()
+        setIsAudioPlaying(true)
+      }
     }, 500)
     return () => clearTimeout(timer)
   }, [])
 
-  // Simulate audio playing and completion
+  // Handle audio events
   useEffect(() => {
-    if (isAudioPlaying) {
-      const timer = setTimeout(() => {
-        setIsAudioComplete(true)
-        setIsAudioPlaying(false)
-      }, 3000)
-      return () => clearTimeout(timer)
+    const audio = audioRef.current
+    
+    const handleEnded = () => {
+      setIsAudioComplete(true)
+      setIsAudioPlaying(false)
     }
-  }, [isAudioPlaying])
+    
+    if (audio) {
+      audio.addEventListener('ended', handleEnded)
+      return () => {
+        audio.removeEventListener('ended', handleEnded)
+      }
+    }
+  }, [])
 
   const handlePathSelect = async (path: string) => {
     setSelectedPath(path)
@@ -76,7 +84,11 @@ export default function LearningPathPage() {
   }
 
   const handlePlayAudio = () => {
-    setIsAudioPlaying(true)
+    if (audioRef.current) {
+      audioRef.current.currentTime = 0
+      audioRef.current.play()
+      setIsAudioPlaying(true)
+    }
   }
 
   const learningPaths = [
@@ -121,6 +133,9 @@ export default function LearningPathPage() {
           className="w-full h-full object-cover"
         />
       </div>
+
+      {/* Audio element */}
+      <audio ref={audioRef} src="/audios/learning_path.mp3" preload="auto" />
 
       <div className="max-w-4xl w-full flex flex-col items-center z-10 bg-white/45 backdrop-blur-md rounded-3xl p-4 md:p-6 border border-white/40 shadow-xl overflow-hidden">
         <ProgressDots totalSteps={6} currentStep={5} />
@@ -179,11 +194,7 @@ export default function LearningPathPage() {
         <AudioControls
           isPlaying={isAudioPlaying}
           onPlay={handlePlayAudio}
-          audioText={`What would you like to learn today, ${studentName}? Choose a math topic that interests you. Your diagnostic showed ${
-            studentLevel === "advanced" ? "you have a solid understanding of math concepts." :
-            studentLevel === "intermediate" ? "you're comfortable with several math concepts." : 
-            "we should build your foundation step by step."
-          }`}
+          audioText={`What would you like to learn today, ${studentName}?`}
         />
       </div>
     </main>

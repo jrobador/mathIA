@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import AudioControls from "@/components/audio-controls"
 import ProgressDots from "@/components/progress-dots"
@@ -30,6 +30,7 @@ export default function ThemePage() {
   const [customThemeName, setCustomThemeName] = useState("")
   const [customThemeDescription, setCustomThemeDescription] = useState("")
   const [studentName, setStudentName] = useState("learner") // Initialize with default value
+  const audioRef = useRef<HTMLAudioElement>(null)
 
   // Progress dots logic
   const diagnosticQuestionsCount = 6
@@ -43,21 +44,33 @@ export default function ThemePage() {
     setStudentName(name)
   }, [])
 
-  // Audio logic
+  // Auto-play audio when page loads
   useEffect(() => { 
-    const timer = setTimeout(() => setIsAudioPlaying(true), 500)
+    const timer = setTimeout(() => {
+      if (audioRef.current) {
+        audioRef.current.play()
+        setIsAudioPlaying(true)
+      }
+    }, 500)
     return () => clearTimeout(timer)
   }, [])
   
-  useEffect(() => { 
-    if (isAudioPlaying) { 
-      const timer = setTimeout(() => { 
-        setIsAudioComplete(true)
-        setIsAudioPlaying(false)
-      }, 6000)
-      return () => clearTimeout(timer)
-    } 
-  }, [isAudioPlaying])
+  // Handle audio events
+  useEffect(() => {
+    const audio = audioRef.current
+    
+    const handleEnded = () => {
+      setIsAudioComplete(true)
+      setIsAudioPlaying(false)
+    }
+    
+    if (audio) {
+      audio.addEventListener('ended', handleEnded)
+      return () => {
+        audio.removeEventListener('ended', handleEnded)
+      }
+    }
+  }, [])
 
   // Handle selection of predefined themes
   const handleThemeSelect = (themeId: string) => { 
@@ -86,7 +99,11 @@ export default function ThemePage() {
   }
 
   const handlePlayAudio = () => { 
-    setIsAudioPlaying(true)
+    if (audioRef.current) {
+      audioRef.current.currentTime = 0
+      audioRef.current.play()
+      setIsAudioPlaying(true)
+    }
   }
 
   // Theme data
@@ -96,9 +113,6 @@ export default function ThemePage() {
      { id: "heroes", title: "Superhero Adventure", description: "Use your math superpowers to help heroes save the city!", image: "/images/superhero-city.png", alt: "A vibrant city skyline with superhero silhouettes", },
   ]
 
-  // Generate the audio prompt using the state variable
-  const audioPrompt = `Choose your learning adventure, ${studentName}! Pick a Magical School, Royal Kingdom, or Superhero Adventure. Or, create your very own!`
-
   return (
     <main className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-indigo-50 to-white p-4 relative overflow-hidden">
       {/* Background image */}
@@ -106,6 +120,9 @@ export default function ThemePage() {
         <div className="absolute inset-0 bg-gradient-to-b from-indigo-900/30 to-indigo-900/60 mix-blend-multiply" /> 
         <img src="/images/learning-background.png" alt="Magical learning background" className="w-full h-full object-cover" /> 
       </div>
+
+      {/* Audio element */}
+      <audio ref={audioRef} src="/audios/theme.mp3" preload="auto" />
 
       {/* Container */}
       <div className="max-w-4xl w-full flex flex-col items-center z-10 bg-white/45 rounded-3xl p-4 md:p-6 border border-white/40 shadow-xl overflow-hidden">
@@ -236,7 +253,7 @@ export default function ThemePage() {
 
         {/* Audio Controls */}
         <div className="mt-auto pt-4">
-          <AudioControls isPlaying={isAudioPlaying} onPlay={handlePlayAudio} audioText={audioPrompt} />
+          <AudioControls isPlaying={isAudioPlaying} onPlay={handlePlayAudio} audioText="Choose your learning adventure!" />
         </div>
       </div>
     </main>

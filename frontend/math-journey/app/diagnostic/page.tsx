@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import AudioControls from "@/components/audio-controls"
@@ -18,7 +18,7 @@ interface DiagnosticQuestion {
   type: QuestionType
   difficulty: DifficultySetting
   problem: string
-  audioText: string
+  audioSrc: string // Changed from audioText to audioSrc
   visualData: {
     blocks?: number[]
     circles?: number[]
@@ -41,7 +41,7 @@ const diagnosticQuestions: DiagnosticQuestion[] = [
     type: "concrete",
     difficulty: DifficultySetting.INITIAL,
     problem: "How many blocks are there in total?",
-    audioText: "Look at these blocks. How many blocks are there in total?",
+    audioSrc: "/audios/diagnostic_1.mp3", // Updated to use actual audio file
     visualData: { blocks: [3, 2] },
     correctAnswer: "5",
     explanation: "There are 3 red blocks and 2 blue blocks. 3 + 2 = 5 blocks in total.",
@@ -53,7 +53,7 @@ const diagnosticQuestions: DiagnosticQuestion[] = [
     type: "pictorial",
     difficulty: DifficultySetting.BEGINNER,
     problem: "How many circles are there in total?",
-    audioText: "Look at these groups of circles. How many circles are there in total?",
+    audioSrc: "/audios/diagnostic_2.mp3", // Updated to use actual audio file
     visualData: { circles: [4, 3] },
     correctAnswer: "7",
     explanation: "There are 4 circles in the first group and 3 circles in the second group. 4 + 3 = 7 circles in total.",
@@ -65,7 +65,7 @@ const diagnosticQuestions: DiagnosticQuestion[] = [
     type: "abstract",
     difficulty: DifficultySetting.BEGINNER,
     problem: "7 + 5 = ?",
-    audioText: "What is seven plus five?",
+    audioSrc: "/audios/diagnostic_3.mp3", // Updated to use actual audio file
     visualData: { equation: { num1: 7, num2: 5, operation: "+" } },
     correctAnswer: "12",
     explanation: "To add 7 + 5, we can break down 5 into 3 + 2. Then: 7 + 3 = 10, and 10 + 2 = 12.",
@@ -77,7 +77,7 @@ const diagnosticQuestions: DiagnosticQuestion[] = [
     type: "abstract",
     difficulty: DifficultySetting.INTERMEDIATE,
     problem: "15 - 8 = ?",
-    audioText: "What is fifteen minus eight?",
+    audioSrc: "/audios/diagnostic_4.mp3", // Updated to use actual audio file
     visualData: { equation: { num1: 15, num2: 8, operation: "-" } },
     correctAnswer: "7",
     explanation: "To subtract 15 - 8, we can think: 15 - 5 = 10, and then 10 - 3 = 7.",
@@ -89,7 +89,7 @@ const diagnosticQuestions: DiagnosticQuestion[] = [
     type: "abstract",
     difficulty: DifficultySetting.INTERMEDIATE,
     problem: "4 × 3 = ?",
-    audioText: "What is four times three?",
+    audioSrc: "/audios/diagnostic_5.mp3", // Updated to use actual audio file
     visualData: { equation: { num1: 4, num2: 3, operation: "×" } },
     correctAnswer: "12",
     explanation: "4 × 3 means 4 groups of 3, or 3 + 3 + 3 + 3 = 12.",
@@ -101,7 +101,7 @@ const diagnosticQuestions: DiagnosticQuestion[] = [
     type: "abstract",
     difficulty: DifficultySetting.ADVANCED,
     problem: "20 ÷ 4 = ?",
-    audioText: "What is twenty divided by four?",
+    audioSrc: "/audios/diagnostic_6.mp3", // Updated to use actual audio file
     visualData: { equation: { num1: 20, num2: 4, operation: "÷" } },
     correctAnswer: "5",
     explanation: "20 ÷ 4 means dividing 20 into 4 equal groups. Each group will have 5 elements.",
@@ -131,13 +131,12 @@ export default function DiagnosticPage() {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [answer, setAnswer] = useState("")
   const [isAudioPlaying, setIsAudioPlaying] = useState(false)
-  // Either use isAudioComplete or remove it if not needed
-  // Option 1: Use it in the component to enable/disable buttons
-  const [audioReady, setAudioReady] = useState(false) // Renamed to more descriptive name
+  const [audioReady, setAudioReady] = useState(false)
   const [showFeedback, setShowFeedback] = useState(false)
   const [isCorrect, setIsCorrect] = useState(false)
   const [results, setResults] = useState<{ id: number; correct: boolean }[]>([])
   const [diagnosticComplete, setDiagnosticComplete] = useState(false)
+  const audioRef = useRef<HTMLAudioElement>(null)
 
   const currentQuestion = diagnosticQuestions[currentQuestionIndex]
 
@@ -147,40 +146,46 @@ export default function DiagnosticPage() {
     setStudentName(name)
   }, [])
 
-
   // Auto-play audio when page loads or question changes (only if intro is passed)
   useEffect(() => {
     if (!showIntro && !diagnosticComplete && !showFeedback) {
       const timer = setTimeout(() => {
-        setIsAudioPlaying(true)
+        if (audioRef.current) {
+          audioRef.current.play()
+          setIsAudioPlaying(true)
+        }
       }, 500)
       return () => clearTimeout(timer)
     }
   }, [currentQuestionIndex, showIntro, diagnosticComplete, showFeedback])
 
-  // Simulate audio playing and completion
+  // Handle audio events
   useEffect(() => {
-    if (isAudioPlaying) {
-      const audioDuration = showFeedback ? 3000 : 4000
-      const timer = setTimeout(() => {
-        setAudioReady(true) // Use the renamed state variable
-        setIsAudioPlaying(false)
-      }, audioDuration)
-      return () => clearTimeout(timer)
+    const audio = audioRef.current
+    
+    const handleEnded = () => {
+      setAudioReady(true)
+      setIsAudioPlaying(false)
     }
-  }, [isAudioPlaying, showFeedback])
+    
+    if (audio) {
+      audio.addEventListener('ended', handleEnded)
+      return () => {
+        audio.removeEventListener('ended', handleEnded)
+      }
+    }
+  }, [])
 
   const handleStartDiagnostic = () => {
     setShowIntro(false)
     setIsAudioPlaying(false)
-    setAudioReady(false) // Reset audio state when starting
+    setAudioReady(false)
   }
 
   const handleSubmit = () => {
     const isAnswerCorrect = answer === currentQuestion.correctAnswer;
     setIsCorrect(isAnswerCorrect);
     setShowFeedback(true);
-    setIsAudioPlaying(true); // Play feedback audio
     setAudioReady(false); // Reset audio ready state
 
     // Store the result for the current question
@@ -243,7 +248,6 @@ export default function DiagnosticPage() {
     }, 3500); // Delay for feedback viewing
   };
 
-
   const handlePrevious = () => {
     if (currentQuestionIndex > 0) {
       setCurrentQuestionIndex((prev) => prev - 1)
@@ -257,13 +261,15 @@ export default function DiagnosticPage() {
   }
 
   const handlePlayAudio = () => {
-    if (!showIntro && !diagnosticComplete) {
-        setIsAudioPlaying(true)
-        setAudioReady(false) // Reset audio ready when replaying
+    if (!showIntro && !diagnosticComplete && audioRef.current) {
+      audioRef.current.currentTime = 0
+      audioRef.current.play()
+      setIsAudioPlaying(true)
+      setAudioReady(false) // Reset audio ready when replaying
     }
   }
 
- const handleNumberInput = (num: string) => {
+  const handleNumberInput = (num: string) => {
     if (showFeedback) return;
 
     if (num === "clear") {
@@ -277,9 +283,8 @@ export default function DiagnosticPage() {
     }
   }
 
-
   // renderDiagnosticSummary (uses final results from state)
-   const renderDiagnosticSummary = () => {
+  const renderDiagnosticSummary = () => {
     // Recalculate based on the final 'results' state
     const correctAnswers = results.filter((r) => r.correct).length
     const totalQuestions = diagnosticQuestions.length
@@ -315,19 +320,21 @@ export default function DiagnosticPage() {
       default: return null
     }
   }
+  
   const renderConcreteVisual = (blocks: number[]) => {
     return (<div className="flex flex-col items-center"><div className="flex flex-wrap items-center justify-center gap-4 md:gap-8 mb-4 min-h-[80px] md:min-h-[100px]">{blocks.map((count, groupIndex) => (<div key={`group-${groupIndex}`} className="flex flex-wrap gap-2 max-w-[180px] justify-center">{Array.from({ length: count }).map((_, i) => (<motion.div key={`block-${groupIndex}-${i}`} initial={{ scale: 0, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ delay: i * 0.1, duration: 0.3 }} className={`w-8 h-8 md:w-10 md:h-10 ${groupIndex === 0 ? "bg-red-600" : "bg-blue-600"} rounded-md flex items-center justify-center text-white font-bold shadow-md`}></motion.div>))}</div>))}</div></div>)
   }
+  
   const renderPictorialVisual = (circles: number[]) => {
      return (<div className="flex flex-col items-center"><div className="flex flex-wrap items-center justify-center gap-6 md:gap-10 mb-4 min-h-[120px] md:min-h-[140px]">{circles.map((count, groupIndex) => (<div key={`circle-group-${groupIndex}`} className="relative h-[120px] w-[120px] md:h-[140px] md:w-[140px]">{Array.from({ length: count }).map((_, i) => { const angle = (i / count) * Math.PI * 2 - Math.PI / 2; const radius = count <= 5 ? 40 : 50; const centerX = 60 + (140 - 120)/2; const centerY = 60 + (140 - 120)/2; const itemSize = 28; const x = centerX + radius * Math.cos(angle) - itemSize / 2; const y = centerY + radius * Math.sin(angle) - itemSize / 2; return (<motion.div key={`circle-${groupIndex}-${i}`} initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: i * 0.1, duration: 0.3 }} className="absolute w-7 h-7 md:w-8 md:h-8 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-md" style={{ left: `${x}px`, top: `${y}px`, backgroundColor: groupIndex === 0 ? "#6d28d9" : "#4338ca", }}></motion.div>) })}</div>))}</div></div>)
    }
+   
    const renderAbstractVisual = (equation: any) => {
     if (!equation) return null
     const { num1, num2, operation } = equation
     let symbol = "+"; if(operation === "-") symbol = "−"; if(operation === "×") symbol = "×"; if(operation === "÷") symbol = "÷";
     return (<div className="flex flex-col items-center justify-center min-h-[80px] md:min-h-[100px]"><motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5 }} className="text-3xl md:text-4xl lg:text-5xl font-bold text-indigo-900 flex items-center gap-3 md:gap-4"><motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2, duration: 0.5 }}>{num1}</motion.span><motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4, duration: 0.5 }}>{symbol}</motion.span><motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.6, duration: 0.5 }}>{num2}</motion.span><motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.8, duration: 0.5 }}>=</motion.span><motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 1.0, duration: 0.5 }}>?</motion.span></motion.div></div>)
   }
-
 
   return (
     <div className="w-full overflow-x-hidden">
@@ -341,6 +348,15 @@ export default function DiagnosticPage() {
             className="w-full h-full object-cover"
           />
         </div>
+
+        {/* Audio element */}
+        {!showIntro && !diagnosticComplete && (
+          <audio 
+            ref={audioRef} 
+            src={currentQuestion?.audioSrc} 
+            preload="auto" 
+          />
+        )}
 
         {/* Main container */}
         <div className="max-w-4xl w-full flex flex-col items-center z-10 bg-white/30 backdrop-blur-md rounded-3xl p-4 md:p-6 border border-white/40 shadow-xl overflow-hidden">
@@ -415,12 +431,12 @@ export default function DiagnosticPage() {
             )}
           </motion.div>
 
-          {/* Audio Controls */}
-          {!showIntro && !diagnosticComplete && (
+          {/* Audio Controls - only when not in feedback mode */}
+          {!showIntro && !diagnosticComplete && !showFeedback && (
             <AudioControls
               isPlaying={isAudioPlaying}
               onPlay={handlePlayAudio}
-              audioText={showFeedback ? (isCorrect ? "Well done! That's the correct answer." : "Not quite right. Let's look at the explanation.") : (currentQuestion?.audioText || "")}
+              audioText=""
             />
           )}
 
