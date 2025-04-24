@@ -105,6 +105,7 @@ export interface AgentOutput {
   action_type?: string;     // Added to store action from backend
   content_type?: string;    // Added to store content_type from backend
   waiting_for_input?: boolean; // Added to explicitly track input state
+  state_metadata?: any; // Added to store metadata from backend
 }
 
 // Mensaje WebSocket
