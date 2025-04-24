@@ -79,7 +79,6 @@ async def create_session(request: Request, body: StartSessionRequest = Body(...)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creating session: {str(e)}")
 
-# Rest of the file remains unchanged
 @router.post("/api/sessions/{session_id}/answer", response_model=Dict[str, Any])
 async def submit_answer(
     request: Request,

@@ -216,7 +216,74 @@ class MathTutorClient {
           .catch(reject); // This uses reject, so no warning
       };
   
-      // Rest of the method remains the same...
+      ws.onmessage = (event) => {
+        clearTimeout(connectionTimeout); // Clear timeout on successful message
+        try {
+          const response = JSON.parse(event.data as string);
+          console.log("Received response on new session WebSocket:", response);
+
+          if (response.type === "session_created") {
+            // --- Session Created Successfully ---
+            const newSessionId = response.data.session_id;
+            const initialResult = response.data.initial_result; // Get the first agent step result
+
+            if (!newSessionId || !initialResult) {
+                 console.error("Invalid session_created response:", response.data);
+                 reject(new Error("Received invalid data from server after session creation."));
+                 ws?.close();
+                 return;
+            }
+
+            // Store session information
+            this.currentSessionId = newSessionId;
+            this._saveSession(); // Save to localStorage
+
+            // Create the response object for the hook
+            const sessionResponse: StartSessionResponse = {
+              session_id: newSessionId,
+              initial_output: { // Format the initial agent step result
+                text: initialResult.text || "¡Bienvenido!", // Provide default text
+                image_url: initialResult.image_url,
+                audio_url: initialResult.audio_url,
+                // Use waiting_for_input from the result's metadata or the result itself
+                prompt_for_answer: initialResult.waiting_for_input ?? initialResult.state_metadata?.waiting_for_input ?? false,
+                evaluation: initialResult.evaluation_type, // Map if needed
+                is_final_step: initialResult.is_final_step || false,
+              },
+              status: "active",
+            };
+
+            // Normalize relative URLs to absolute
+            this._normalizeContentUrls(sessionResponse.initial_output);
+
+            // Close this temporary WebSocket connection
+            ws?.close();
+
+            // NOW, connect to the persistent WebSocket for this session
+            this._connectToSessionWebSocket(); // Connect using the NEWLY set this.currentSessionId
+
+            resolve(sessionResponse);
+          } else if (response.type === "error") {
+            reject(new Error(response.message || "Unknown error creating session"));
+            ws?.close();
+          } else {
+            console.warn("Received unexpected message type on new session WebSocket:", response.type);
+            reject(new Error(`Unexpected message type: ${response.type}`));
+            ws?.close();
+          }
+        } catch (error) {
+          console.error("Error parsing message on new session WebSocket:", error);
+          reject(error as Error);
+          ws?.close(); // Close on parse error
+        }
+      };
+  
+      ws.onclose = (event) => {
+        clearTimeout(connectionTimeout); // Clear timeout if closed before message/error
+        console.log(`New session WebSocket closed. Code: ${event.code}, Reason: ${event.reason}`);
+        // If it closes without resolving/rejecting, it might indicate a problem or that HTTP fallback was triggered.
+        // Avoid rejecting here again if HTTP fallback is already handling it.
+      };
     });
   }
 
@@ -227,7 +294,7 @@ class MathTutorClient {
     personalized_theme = 'space',
     // initial_message = null, // Not used by this endpoint
     config = null,
-    // diagnostic_results = null, // Not used by this endpoint
+    diagnostic_results = null, // Now used for HTTP fallback
     learning_path = null
   }: StartSessionOptions = {}): Promise<StartSessionResponse> {
     console.warn("WebSocket failed, falling back to HTTP for starting session...");
@@ -235,14 +302,24 @@ class MathTutorClient {
     const topicId = learning_path ? this._mapLearningPathToTopic(learning_path) : 'fractions_introduction';
 
     try {
+        // Prepare diagnostic results for HTTP request if available
+        let calculatedMastery = 0.0;
+        if (diagnostic_results && Array.isArray(diagnostic_results) && diagnostic_results.length > 0) {
+            const totalQuestions = diagnostic_results.length;
+            const correctAnswers = diagnostic_results.filter(r => r.correct).length;
+            calculatedMastery = 0.1 + (0.7 * (correctAnswers / totalQuestions));
+            console.log(`HTTP fallback: Calculated mastery from diagnostics: ${calculatedMastery.toFixed(2)}`);
+        }
+
         const response = await fetch(`${this.baseUrl}/api/sessions`, {
           method: 'POST',
           headers: this.headers,
           body: JSON.stringify({
             topic_id: topicId,
             personalized_theme,
-            initial_mastery: 0.0, // Or pass if available
-            user_id: config?.user_id
+            initial_mastery: calculatedMastery, // Use calculated mastery from diagnostics if available
+            user_id: config?.user_id,
+            diagnostic_results: diagnostic_results // Include diagnostic results in HTTP request
           })
         });
 

@@ -119,8 +119,15 @@ class AdaptiveLearningAgent:
 
         return {
             "session_id": session_id,
-            "initial_result": first_step_result,
-             # Include initial state metadata for convenience
+            "initial_output": {  # Add this structure
+                "text": first_step_result.get("text", ""),
+                "image_url": first_step_result.get("image_url"),
+                "audio_url": first_step_result.get("audio_url"),
+                "prompt_for_answer": first_step_result.get("requires_input", False),
+                "evaluation": first_step_result.get("evaluation_type"),
+                "is_final_step": first_step_result.get("is_final_step", False),
+            },
+            "initial_result": first_step_result,  # Keep this for backward compatibility
             "state_metadata": self._get_state_metadata(state)
         }
 

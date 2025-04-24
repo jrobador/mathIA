@@ -321,8 +321,22 @@ async def websocket_new_session_endpoint(websocket: WebSocket):
                 # Send success response back to client, including requestId
                 await send_json_to_websocket(websocket, {
                     "type": "session_created",
-                    "data": session_response, # Contains session_id and initial_result
-                    "requestId": request_id # Include original request ID
+                    "data": {
+                        "session_id": session_response.get('session_id'),
+                        # Extract data from first_step_result to match frontend expectations
+                        "initial_output": {
+                            "text": session_response.get('initial_result', {}).get('text', ''),
+                            "image_url": session_response.get('initial_result', {}).get('image_url'),
+                            "audio_url": session_response.get('initial_result', {}).get('audio_url'),
+                            "prompt_for_answer": session_response.get('initial_result', {}).get('waiting_for_input', False),
+                            "evaluation": session_response.get('initial_result', {}).get('evaluation_type'),
+                            "is_final_step": session_response.get('initial_result', {}).get('is_final_step', False),
+                        },
+                        # Keep original data for backward compatibility
+                        "initial_result": session_response.get('initial_result', {}),
+                        "state_metadata": session_response.get('state_metadata', {})
+                    },
+                    "requestId": request_id
                 })
                 print(f"Sent session_created for {session_response.get('session_id')} back to conn {connection_id}")
 
