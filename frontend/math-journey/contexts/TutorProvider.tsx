@@ -25,6 +25,8 @@ export interface MessageOptions {
   isEvaluation?: boolean;
   evaluationType?: string | null;
   isCorrect?: boolean;
+  actionType?: string | null;  // Add actionType to track backend action
+  contentType?: string | null; // Add contentType to track backend content type
 }
 
 export interface Message {
@@ -37,6 +39,8 @@ export interface Message {
   isEvaluation?: boolean;
   evaluationType?: string | null;
   isCorrect?: boolean;
+  actionType?: string | null;  // Add actionType to message interface
+  contentType?: string | null; // Add contentType to message interface
 }
 
 // Interface defining the context's value
@@ -95,6 +99,8 @@ export function TutorProvider({ children }: TutorProviderProps): JSX.Element {
             isEvaluation: !!agentOutput.evaluation,
             evaluationType: agentOutput.evaluation,
             isCorrect: agentOutput.evaluation === "Correct", // Assuming "Correct" string value
+            actionType: agentOutput.action_type, // Pass action_type from backend
+            contentType: agentOutput.content_type, // Pass content_type from backend
          });
       }
     }
@@ -143,11 +149,9 @@ export function TutorProvider({ children }: TutorProviderProps): JSX.Element {
 
   // Context function to request continuation
   const requestContinue = useCallback(async (): Promise<void> => {
-    // Optional: Add a system message to indicate action?
-    // addMessage(MessageType.SYSTEM, "Continuing...");
-    // Call the hook's request continue function (CORRECTED NAME)
+    // No system message needed here, just call the hook's continue function
     await requestTutorContinue();
-  }, [requestTutorContinue /*, addMessage */]); // Dependencies
+  }, [requestTutorContinue]); // Dependencies
 
 
   // Context function to end the session

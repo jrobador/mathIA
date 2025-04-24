@@ -581,7 +581,7 @@ async def evaluate_answer(state: StudentState, user_answer: str) -> Dict[str, An
         # Actualizar estado
         state.last_evaluation = evaluation_result
         state.last_action_type = "evaluate_answer"
-        state.waiting_for_input = False
+        state.waiting_for_input = True
         
         # Generar mensaje de retroalimentación básica
         if evaluation_result == EvaluationOutcome.CORRECT:
@@ -605,7 +605,9 @@ async def evaluate_answer(state: StudentState, user_answer: str) -> Dict[str, An
             "audio_url": audio_url,
             "is_correct": evaluation_result == EvaluationOutcome.CORRECT,
             "old_mastery": old_mastery,
-            "new_mastery": new_mastery
+            "new_mastery": new_mastery,
+            "is_final_step": True,
+            "waiting_for_input": True
         }
         
     except Exception as e:

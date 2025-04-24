@@ -102,7 +102,9 @@ export interface AgentOutput {
   prompt_for_answer?: boolean;
   evaluation?: string | null;
   is_final_step?: boolean;
-  action_type?: string;
+  action_type?: string;     // Added to store action from backend
+  content_type?: string;    // Added to store content_type from backend
+  waiting_for_input?: boolean; // Added to explicitly track input state
 }
 
 // Mensaje WebSocket

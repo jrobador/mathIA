@@ -75,18 +75,20 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
     const checkConnectionInterval = setInterval(() => {
       setIsConnected(client.isWebSocketConnected());
     }, 3000);
-
+  
     // Use the imported or defined WebSocketMessage type
     const handlePushedMessage = (message: WebSocketMessage) => {
       console.log("Hook received message:", message);
       setIsProcessing(false); // Turn off loading when ANY message arrives
-
+  
       if (message.type === "agent_response") {
         console.log("Agent response data structure:", JSON.stringify(message.data, null, 2));
       }
-
+  
       if (message.type === "agent_response" && message.data) {
         const agentData = message.data;
+        
+        // Create the agent output with additional properties
         setAgentOutput({
           text: agentData.text || "Agent response",
           image_url: agentData.image_url,
@@ -94,7 +96,11 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
           prompt_for_answer: agentData.waiting_for_input ?? agentData.state_metadata?.waiting_for_input ?? false,
           evaluation: agentData.evaluation_type || agentData.state_metadata?.last_evaluation || null,
           is_final_step: agentData.is_final_step || false,
+          // Add these new properties to capture backend action and content types
+          action_type: agentData.action || agentData.executed_action_name || null,
+          content_type: agentData.content_type || null
         });
+        
         if (agentData.state_metadata?.mastery !== undefined) {
           setMasteryLevel(agentData.state_metadata.mastery);
         }
@@ -115,16 +121,14 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
         }
       }
     };
-
+  
     client.addMessageHandler(handlePushedMessage);
-
+  
     return () => {
       clearInterval(checkConnectionInterval);
       client.removeMessageHandler(handlePushedMessage);
     };
-  // Added resetState to dependency array as it's called inside
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client /* , resetState */ ]); // Note: adding resetState causes infinite loops if not memoized correctly, be careful. Often better to call it directly where needed.
+  }, [client]);
 
 
   // === Action Functions ===

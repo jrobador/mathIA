@@ -118,18 +118,24 @@ export default function LessonPage() {
     if (currentOutput) {
       console.log("New content received:", currentOutput);
       
-      // Check if the action_type indicates input required
-      if (currentOutput.action_type === "require_input") {
-        console.log("Force showing input form based on require_input action");
-        setForceInputRequired(true);
-      } else {
-        // Reset the force flag when we get a different action
-        setForceInputRequired(false);
-      }
-      
-      // Store the action type for reference in the UI logic
+      // Enhanced action type handling
       if (currentOutput.action_type) {
+        console.log(`Received action type: ${currentOutput.action_type}`);
         setLastActionType(currentOutput.action_type);
+        
+        // Specific handling for require_input action
+        if (currentOutput.action_type === "require_input") {
+          console.log("Force showing input form based on require_input action");
+          setForceInputRequired(true);
+        } else if (currentOutput.action_type === "evaluation_result") {
+          // For evaluation results, make sure we're not forcing input requirement
+          setForceInputRequired(false);
+        } else if (currentOutput.action_type === "present_content" && 
+                  currentOutput.content_type === "continuation_ready") {
+          // This is the state after evaluation but before the next problem
+          // We will show the Continue button here (not require input)
+          setForceInputRequired(false);
+        }
       }
       
       if (currentOutput.audio_url) setAudioKey(Date.now());
@@ -271,29 +277,51 @@ export default function LessonPage() {
   // Use the isLoading state from the context directly
   const isLoading = isTutorLoading;
 
-  // UPDATED: Determine if the Continue button should be shown
-  // - Don't show continue when forceInputRequired is true (backend requires input)
-  // - Don't show continue when action_type is 'pause'
-  // - Don't show continue when prompt_for_answer is true
-  // - Don't show continue during loading or errors
+  // UPDATED: Determine if the Continue button should be shown (improved logic)
+  // Now properly handles the action types and continuation_ready content type
   const showContinueButton = currentOutput && 
                             !isLoading && 
                             !errorState.isError && 
-                            !currentOutput.evaluation && 
-                            !currentOutput.prompt_for_answer && 
                             !forceInputRequired &&
-                            lastActionType !== "pause";
+                            (
+                              // Show continue button for evaluation results
+                              (currentOutput.evaluation && !currentOutput.prompt_for_answer) ||
+                              // Show continue button for continuation_ready content
+                              (currentOutput.action_type === "present_content" && 
+                               currentOutput.content_type === "continuation_ready") ||
+                              // Show continue for regular content that doesn't need input
+                              (!currentOutput.evaluation && 
+                               !currentOutput.prompt_for_answer && 
+                               lastActionType !== "require_input" &&
+                               lastActionType !== "pause")
+                            );
                             
   // UPDATED: Determine if the Answer input section should be shown
-  // Show input when:
-  // - prompt_for_answer is true OR forceInputRequired is true
-  // - not during evaluation
-  // - not during loading or errors
+  // Enhanced logic for when to show input
   const showAnswerInput = currentOutput && 
                          !isLoading && 
                          !errorState.isError && 
-                         !currentOutput.evaluation && 
-                         (currentOutput.prompt_for_answer || forceInputRequired);
+                         (
+                           // Show for explicit prompt_for_answer
+                           currentOutput.prompt_for_answer || 
+                           // Show when backend explicitly requires input 
+                           forceInputRequired ||
+                           // Show based on action_type
+                           currentOutput.action_type === "require_input"
+                         ) &&
+                         // DON'T show during evaluation
+                         !currentOutput.evaluation;
+
+  // Debug helper data (for development troubleshooting)
+  const debugInfo = {
+    actionType: lastActionType || "none",
+    contentType: currentOutput?.content_type || "none",
+    promptForAnswer: currentOutput?.prompt_for_answer ? "true" : "false",
+    forceInput: forceInputRequired ? "true" : "false",
+    evaluation: currentOutput?.evaluation || "none",
+    showContinue: showContinueButton ? "true" : "false",
+    showInput: showAnswerInput ? "true" : "false"
+  };
 
 
   return (
@@ -338,12 +366,13 @@ export default function LessonPage() {
           </div>
         </div>
 
-        {/* Debug indicator - optional, helps during development */}
+        {/* Enhanced Debug indicator - very helpful during development */}
         {process.env.NODE_ENV === 'development' && (
-          <div className="text-xs text-gray-500 mb-2">
-            Debug: {forceInputRequired ? "Input Required" : "No forced input"} | 
-            Action: {lastActionType || "none"} |
-            Prompt: {currentOutput?.prompt_for_answer ? "Yes" : "No"}
+          <div className="text-xs text-gray-500 mb-2 p-2 bg-gray-100 rounded-md">
+            <div><strong>Debug Info:</strong></div>
+            <div>Action: {debugInfo.actionType} | Content: {debugInfo.contentType}</div>
+            <div>Prompt: {debugInfo.promptForAnswer} | Force: {debugInfo.forceInput}</div>
+            <div>Eval: {debugInfo.evaluation} | Continue: {debugInfo.showContinue} | Input: {debugInfo.showInput}</div>
           </div>
         )}
 
@@ -369,6 +398,9 @@ export default function LessonPage() {
             <motion.div
               key="error"
               // ... (error state motion props - unchanged) ...
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
               className="w-full max-w-3xl bg-red-50 rounded-2xl shadow-xl my-4 md:my-6 relative border border-red-200 overflow-hidden p-4 md:p-6 min-h-[400px] md:min-h-[450px] flex flex-col justify-center items-center"
             >
                {/* ... (error icon, title, message - unchanged) ... */}

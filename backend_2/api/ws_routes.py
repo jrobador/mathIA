@@ -150,6 +150,28 @@ async def websocket_session_endpoint(websocket: WebSocket, session_id: str):
                     # Send agent response(s) back, including the original request ID
                     await send_agent_responses(websocket, results, request_id)
 
+                    if results and len(results) > 0:
+                        last_result = results[-1]  # Get the last result
+                        if last_result.get("action") == "evaluation_result":
+                            print(f"DEBUG: Sending follow-up 'present_content' after evaluation for requestId: {request_id}")
+                            
+                            # Create a completion message to unblock the frontend
+                            completion_message = {
+                                "action": "present_content",
+                                "content_type": "continuation_ready",
+                                "text": "",  # Empty text is fine
+                                "requires_input": False,
+                                "is_final_step": True,
+                                "waiting_for_input": True,
+                                "state_metadata": last_result.get("state_metadata", {})
+                            }
+                            
+                            # Small delay to ensure proper sequence
+                            await asyncio.sleep(0.1)
+                            
+                            # Send the completion message with the same requestId
+                            await send_agent_responses(websocket, [completion_message], request_id)
+
                 elif action == "continue":
                     # Get the current state to check if it's waiting for input
                     state_data = learning_agent.get_session_state(session_id)
