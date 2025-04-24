@@ -31,26 +31,20 @@ export default function LessonPage() {
   const [learningPath, setLearningPath] = useState("");
   const [learningTheme, setLearningTheme] = useState("");
   const [userAnswer, setUserAnswer] = useState("");
-  const [evaluationToast, setEvaluationToast] = useState<{
-    isCorrect: boolean;
-    text: string;
-    showing: boolean;
-  }>({ isCorrect: false, text: "", showing: false });
   const [errorState, setErrorState] = useState<{ isError: boolean; message: string }>({
     isError: false,
     message: "",
   });
   const [audioKey, setAudioKey] = useState(Date.now());
   const [imageKey, setImageKey] = useState(Date.now());
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   
   // References
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const sessionStartAttemptedRef = useRef(false);
   const userInfoLoadedRef = useRef(false);
   const toastShownRef = useRef(false);
-  const autoTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const evaluationTextRef = useRef<string>("");
-
+  
   // --- useEffect Hooks ---
 
   // Load user info
@@ -61,16 +55,6 @@ export default function LessonPage() {
       setLearningPath(localStorage.getItem("learningPath") || "addition"); 
       setLearningTheme(localStorage.getItem("learningTheme") || "space");
     }
-  }, []);
-
-  // Clean up any pending timers when component unmounts
-  useEffect(() => {
-    return () => {
-      if (autoTimerRef.current) {
-        clearTimeout(autoTimerRef.current);
-        autoTimerRef.current = null;
-      }
-    };
   }, []);
 
   // Start session logic
@@ -105,72 +89,110 @@ export default function LessonPage() {
     if (userInfoLoadedRef.current) { initializeSession(); }
   }, [sessionId, isTutorLoading, startSession, learningPath, learningTheme, studentName]);
 
-  // Play audio function
+  // Play audio function - IMPROVED to handle errors better
   const playAudio = useCallback((url: string | null | undefined) => {
-    if (url && audioRef.current) { 
-      if (audioRef.current.src !== url) { audioRef.current.src = url; } 
-      audioRef.current.currentTime = 0; 
-      audioRef.current.play().catch(err => console.error("Error playing audio:", err)); 
+    if (!url) return;
+    
+    try {
+      if (audioRef.current) {
+        // First pause any current playback
+        audioRef.current.pause();
+        
+        // Check if URL is actually changing to avoid unnecessary reloads
+        if (audioRef.current.src !== url) {
+          audioRef.current.src = url;
+        }
+        
+        // Reset to beginning
+        audioRef.current.currentTime = 0;
+        
+        // Track playback state
+        setIsPlayingAudio(true);
+        
+        // Play with proper error handling
+        audioRef.current.play()
+          .then(() => {
+            console.log("Audio playing successfully");
+          })
+          .catch(err => {
+            console.warn("Error playing audio:", err);
+            setIsPlayingAudio(false);
+            // Don't show errors to users for audio - it's not critical
+          });
+      }
+    } catch (err) {
+      console.warn("Exception in playAudio:", err);
+      setIsPlayingAudio(false);
     }
   }, []);
 
-  // --- UPDATED: Handle evaluation responses and toast display ---
+  // Audio event listeners - IMPROVED
   useEffect(() => {
-    // When an evaluation is received, show toast but do NOT set up auto-continue
+    const audio = audioRef.current;
+    
+    const handleEnded = () => {
+      setIsPlayingAudio(false);
+    };
+    
+    const handleError = (e: ErrorEvent) => {
+      console.warn("Audio error event:", e);
+      setIsPlayingAudio(false);
+    };
+    
+    if (audio) {
+      audio.addEventListener('ended', handleEnded);
+      audio.addEventListener('error', handleError as EventListener);
+      
+      return () => {
+        audio.removeEventListener('ended', handleEnded);
+        audio.removeEventListener('error', handleError as EventListener);
+      };
+    }
+  }, []);
+
+  // Effect to handle toast display for evaluation - FIXED
+  useEffect(() => {
     if (isEvaluationReceived && currentOutput && currentOutput.evaluation) {
       console.log("🔔 Showing evaluation toast for existing content");
       
-      // Cancel any existing auto-continue timer (safety check)
-      if (autoTimerRef.current) {
-        clearTimeout(autoTimerRef.current);
-        autoTimerRef.current = null;
-      }
-  
       // Only show toast if not shown already for this evaluation 
       if (!toastShownRef.current) {
         const isCorrect = currentOutput.evaluation === EvaluationResult.CORRECT;
-        const toastDuration = 7000;
+        const toastDuration = 4000; // Reduced from 7000
         
-        // Show a simple toast with predefined messages
-        if (isCorrect) {
-          toast.custom((id) => (
-            <div className="bg-green-100 border-l-4 border-green-500 p-4 rounded shadow-lg">
-              <div className="flex">
-                <CheckCircledIcon className="text-green-600 h-5 w-5 mt-0.5 mr-3 flex-shrink-0" />
-                <div>
-                  <p className="font-bold text-green-800">Correct!</p>
-                  <p className="text-green-700">Great job! You got it right.</p>
-                </div>
-              </div>
-            </div>
-          ), { duration: toastDuration, position: "top-center" });
-        } else {
-          toast.custom((id) => (
-            <div className="bg-orange-100 border-l-4 border-orange-500 p-4 rounded shadow-lg">
-              <div className="flex">
+        // Show toast with predefined messages
+        toast.custom((id) => (
+          <div className={`bg-${isCorrect ? 'green' : 'orange'}-100 border-l-4 border-${isCorrect ? 'green' : 'orange'}-500 p-4 rounded shadow-lg`}>
+            <div className="flex">
+              {isCorrect ? 
+                <CheckCircledIcon className="text-green-600 h-5 w-5 mt-0.5 mr-3 flex-shrink-0" /> :
                 <CrossCircledIcon className="text-orange-600 h-5 w-5 mt-0.5 mr-3 flex-shrink-0" />
-                <div>
-                  <p className="font-bold text-orange-800">Not quite right</p>
-                  <p className="text-orange-700">Try again with a different approach.</p>
-                </div>
+              }
+              <div>
+                <p className={`font-bold text-${isCorrect ? 'green' : 'orange'}-800`}>
+                  {isCorrect ? "Correct!" : "Not quite right"}
+                </p>
+                <p className={`text-${isCorrect ? 'green' : 'orange'}-700`}>
+                  {isCorrect ? "Great job! You got it right." : "Try again with a different approach."}
+                </p>
               </div>
             </div>
-          ), { duration: toastDuration, position: "top-center" });
-        }
+          </div>
+        ), { duration: toastDuration, position: "top-center" });
         
         // Mark that we've shown a toast for this evaluation
         toastShownRef.current = true;
         
-        // Play audio if available (from evaluation)
-        if (currentOutput.audio_url) {
-          setTimeout(() => playAudio(currentOutput.audio_url), 100);
+        // If there's audio and we're not already playing, play it
+        if (currentOutput.audio_url && !isPlayingAudio) {
+          playAudio(currentOutput.audio_url);
         }
       }
     } else {
       // Reset toast shown ref when there's no evaluation
       toastShownRef.current = false;
     }
-  }, [isEvaluationReceived, currentOutput, playAudio]);
+  }, [isEvaluationReceived, currentOutput, playAudio, isPlayingAudio]);
 
   // Effect to handle media updates for non-evaluation content
   useEffect(() => {
@@ -181,9 +203,9 @@ export default function LessonPage() {
     }
   }, [currentOutput, isEvaluationReceived]);
 
-  // Handle submitting an answer
+  // Handle submitting an answer - IMPROVED error handling
   const handleSubmitAnswer = async () => {
-    if (!userAnswer.trim() || isTutorLoading || isEvaluationReceived) { 
+    if (!userAnswer.trim() || isTutorLoading) { 
       return; 
     }
     
@@ -193,13 +215,14 @@ export default function LessonPage() {
       // Clear any existing evaluation states
       clearEvaluationState();
       
-      if (autoTimerRef.current) {
-        clearTimeout(autoTimerRef.current);
-        autoTimerRef.current = null;
-      }
-      
       // Reset toast shown ref
       toastShownRef.current = false;
+      
+      // Pause any playing audio to avoid interference
+      if (audioRef.current && !audioRef.current.paused) {
+        audioRef.current.pause();
+        setIsPlayingAudio(false);
+      }
       
       // Send the message
       await sendMessage(userAnswer); 
@@ -212,11 +235,9 @@ export default function LessonPage() {
     }
   };
 
-  // Handle Continue button click (manual continue)
+  // Handle Continue button click - IMPROVED
   const handleContinue = async () => {
-    if (isTutorLoading || isEvaluationReceived) { 
-      return; 
-    }
+    if (isTutorLoading) return;
     
     try { 
       console.log("Manually requesting continue..."); 
@@ -224,10 +245,10 @@ export default function LessonPage() {
       // Clear any evaluation states
       clearEvaluationState();
       
-      // Clean up any existing auto-continue timers
-      if (autoTimerRef.current) {
-        clearTimeout(autoTimerRef.current);
-        autoTimerRef.current = null;
+      // Pause any playing audio to avoid interference
+      if (audioRef.current && !audioRef.current.paused) {
+        audioRef.current.pause();
+        setIsPlayingAudio(false);
       }
       
       // Send the continue request
@@ -245,17 +266,21 @@ export default function LessonPage() {
     if (e.key === 'Enter' && 
         currentOutput?.prompt_for_answer && 
         userAnswer.trim() && 
-        !isTutorLoading &&
-        !isEvaluationReceived) { 
+        !isTutorLoading) { 
       handleSubmitAnswer(); 
     }
   };
 
-  // Handle number pad
+  // Handle number pad - FIXED
   const handleNumberInput = (input: string) => {
-    if (input === "clear") setUserAnswer(""); 
-    else if (input === "backspace") setUserAnswer(prev => prev.slice(0, -1)); 
-    else if (userAnswer.length < 10) setUserAnswer(prev => prev + input);
+    // Always allow number pad input, even during evaluation
+    if (input === "clear") {
+      setUserAnswer("");
+    } else if (input === "backspace") {
+      setUserAnswer(prev => prev.slice(0, -1));
+    } else if (userAnswer.length < 10) {
+      setUserAnswer(prev => prev + input);
+    }
   };
 
   // Handle refresh
@@ -280,20 +305,16 @@ export default function LessonPage() {
   const themeStyles = getThemeStyles();
   
   // SIMPLIFIED: Loading state depends solely on hook's isLoading
-  // We rely on the hook to properly manage loading state (not showing loading during evaluation)
   const isLoading = isTutorLoading;
 
   // UPDATED: Button/input visibility logic
-  // Show answer input even during evaluation display, but disable it
+  // CRITICAL FIX: Show answer input regardless of evaluation
   const showAnswerInput = 
     currentOutput?.prompt_for_answer && 
     !isLoading && 
     !errorState.isError;
 
-  const answerInputDisabled = isEvaluationReceived;
-
-    
-  // CRITICAL FIX: Never show continue button during evaluation!  
+  // CRITICAL FIX: Never show continue button during evaluation  
   const showContinueButton = 
     currentOutput && 
     !currentOutput.prompt_for_answer && 
@@ -310,6 +331,7 @@ export default function LessonPage() {
     showingEval: isEvaluationReceived ? "true" : "false",
     showInput: showAnswerInput ? "true": "false", 
     showContinue: showContinueButton ? "true" : "false",
+    isPlayingAudio: isPlayingAudio ? "true" : "false"
   };
 
   return (
@@ -338,12 +360,17 @@ export default function LessonPage() {
         {/* Debug info in development */}
         {process.env.NODE_ENV === 'development' && (
           <div className="text-xs text-gray-500 mb-2 p-2 bg-gray-100 rounded-md w-full text-left">
-            <div><strong>Debug:</strong> Loading: {debugInfo.isLoading} | Evaluation: {debugInfo.showingEval} | Input: {debugInfo.showInput} | Continue: {debugInfo.showContinue} | Action: {debugInfo.currentAction} | Prompt: {debugInfo.currentPrompt}</div>
+            <div><strong>Debug:</strong> Loading: {debugInfo.isLoading} | Evaluation: {debugInfo.showingEval} | Input: {debugInfo.showInput} | Continue: {debugInfo.showContinue} | AudioPlaying: {debugInfo.isPlayingAudio} | Action: {debugInfo.currentAction} | Prompt: {debugInfo.currentPrompt}</div>
           </div>
         )}
 
-        {/* Central Audio Player */}
-        <audio ref={audioRef} className="hidden" />
+        {/* Central Audio Player - CRITICAL FIX: No audio source by default */}
+        <audio 
+          ref={audioRef} 
+          className="hidden" 
+          onEnded={() => setIsPlayingAudio(false)}
+          onError={() => setIsPlayingAudio(false)}
+        />
 
         {/* Content Area */}
         <AnimatePresence mode="wait">
@@ -424,8 +451,10 @@ export default function LessonPage() {
                         size="sm" 
                         onClick={() => playAudio(currentOutput.audio_url)} 
                         className="flex items-center bg-white/80 hover:bg-indigo-50"
+                        disabled={isPlayingAudio}
                       >
-                        <Volume2 className="h-4 w-4 mr-2 text-indigo-600" /> Play Audio
+                        <Volume2 className="h-4 w-4 mr-2 text-indigo-600" /> 
+                        {isPlayingAudio ? "Playing..." : "Play Audio"}
                       </Button>
                     </div>
                   )}
@@ -472,6 +501,7 @@ export default function LessonPage() {
                           size="lg" 
                           onClick={handleSubmitAnswer} 
                           className={`${themeStyles.buttonColor} text-white px-8 py-3 rounded-full text-lg shadow-lg transition-all duration-300 hover:scale-105 hover:shadow-xl border border-indigo-400/30`} 
+                          disabled={!userAnswer.trim() || isLoading}
                         >
                           {isLoading ? (
                             <>
@@ -494,7 +524,7 @@ export default function LessonPage() {
                         size="lg" 
                         onClick={handleContinue} 
                         className={`${themeStyles.buttonColor} text-white px-8 py-3 rounded-full text-lg shadow-lg transition-all duration-300 hover:scale-105 hover:shadow-xl border border-indigo-400/30`} 
-                        disabled={isLoading || isEvaluationReceived}
+                        disabled={isLoading}
                       >
                         {isLoading ? (
                           <>
