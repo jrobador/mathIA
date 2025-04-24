@@ -284,15 +284,18 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
   // === Effects for Auto-Connect and Cleanup ===
 
   useEffect(() => {
-    // Use client method here (assuming it exists)
-    if (autoConnect && !client.hasActiveSession() && !isProcessing && !autoConnectPerformedRef.current && !sessionRequestPendingRef.current) {
+    // Only auto-connect if we have a theme already selected (added condition)
+    const themeSelected = localStorage.getItem("learningTheme") !== null;
+    
+    if (autoConnect && themeSelected && !client.hasActiveSession() && 
+        !isProcessing && !autoConnectPerformedRef.current && !sessionRequestPendingRef.current) {
       const autoInitialize = async () => {
         console.log("useMathTutor: Auto-connecting session...");
         autoConnectPerformedRef.current = true;
-  
+        
         const theme = localStorage.getItem("learningTheme") || "space";
         const path = localStorage.getItem("learningPath") || "addition";
-  
+        
         await startSession({
           personalized_theme: theme,
           learning_path: path,

@@ -5,13 +5,10 @@ import { useRouter } from "next/navigation"
 import AudioControls from "@/components/audio-controls"
 import ProgressDots from "@/components/progress-dots"
 import { motion } from "framer-motion"
-import { useMathTutor } from "@/hooks/use-math-tutor"
 import { toast } from "sonner"
 
 export default function LearningPathPage() {
   const router = useRouter()
-  const { startSession } = useMathTutor()
-
   // States
   const [isAudioPlaying, setIsAudioPlaying] = useState(false)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
@@ -77,17 +74,6 @@ export default function LearningPathPage() {
           // Continue without diagnostic results
         }
       }
-  
-      // Start session in background while navigating
-      // Use the correct property names that match the StartSessionOptions interface
-      startSession({
-        learning_path: path,
-        diagnostic_results: diagnosticResults,
-        // Remove initialMessage or initial_message if it's not in the interface
-      }).catch((error: unknown) => {
-        console.error("Error starting session:", error)
-        // No need to show toast here, since we're navigating away
-      })
   
       // Navigate to theme selection
       router.push("/theme")
