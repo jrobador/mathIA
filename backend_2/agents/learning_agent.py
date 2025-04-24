@@ -206,29 +206,31 @@ class AdaptiveLearningAgent:
 
     async def handle_user_input(self, session_id: str, user_input: str) -> UserInputHandlingResponse:
         """
-        Processes user input by evaluating the answer.
-        CRITICAL: Returns ONLY the evaluation result dictionary.
-        The frontend client MUST explicitly request the next step via 'continue'.
+        Processes user input by first evaluating the answer, then
+        returning BOTH the evaluation result and next step in a single response.
+        This simplifies the frontend flow and eliminates race conditions.
 
         Args:
             session_id: ID of the session.
             user_input: User's answer input.
 
         Returns:
-            A dictionary representing the agent's evaluation response.
+            A list containing:
+            - The evaluation response
+            - The next step response (if applicable)
         """
         print(f"[handle_user_input] START - session: {session_id}, input: '{user_input}'")
         state = self._get_session_state_object(session_id)
         if not state:
             print(f"[handle_user_input] ERROR - Session not found: {session_id}")
-            return {"action": "error", "error": "Session not found"}
+            return [{"action": "error", "error": "Session not found"}]
 
         # Update timestamp
         state.updated_at = datetime.now()
 
         # Log warning if state wasn't waiting, but proceed
         if not state.waiting_for_input:
-             print(f"[handle_user_input] Warning: Received input for session {session_id} when agent state.waiting_for_input was False.")
+            print(f"[handle_user_input] Warning: Received input for session {session_id} when agent state.waiting_for_input was False.")
 
         try:
             # --- Step 1: Evaluate the Answer ---
@@ -236,7 +238,7 @@ class AdaptiveLearningAgent:
             # - Calling the LLM for evaluation.
             # - Updating mastery, consecutive counts.
             # - Adding messages to history.
-            # - Setting state.waiting_for_input = False (IMPORTANT!)
+            # - Setting state.waiting_for_input = False
             # - Returning the evaluation result dictionary.
             print(f"[handle_user_input] Calling evaluate_answer...")
             eval_result = await evaluate_answer(state, user_input)
@@ -253,12 +255,17 @@ class AdaptiveLearningAgent:
                 print(f"[handle_user_input] Error occurred within evaluate_answer. Returning error result.")
                 # Ensure waiting_for_input is False even on evaluation error
                 eval_result["waiting_for_input"] = False
-                return eval_result # Return the error dictionary from evaluate_answer
+                return [eval_result] # Return the error dictionary from evaluate_answer
 
-            # --- Step 4: Return ONLY the Evaluation Result ---
-            # DO NOT CALL process_step or determine_next_step here.
-            print(f"[handle_user_input] SUCCESS - Returning evaluation result ONLY for session {session_id}. Frontend must send 'continue'.")
-            return eval_result # Return the single dictionary
+            # --- Step 4: Get Next Step Automatically ---
+            # THIS IS THE KEY CHANGE: We determine and execute the next step immediately
+            print(f"[handle_user_input] Automatically determining next step...")
+            next_step_result = await self.process_step(session_id)
+            
+            # --- Step 5: Return Both Results ---
+            # Return both the evaluation AND the next step in an ordered list
+            print(f"[handle_user_input] SUCCESS - Returning BOTH evaluation and next step for session {session_id}.")
+            return [eval_result, next_step_result]
 
         except Exception as e:
             import traceback
@@ -269,13 +276,13 @@ class AdaptiveLearningAgent:
             state.waiting_for_input = False # Ensure state consistency on error
             state.updated_at = datetime.now()
             # Return a standard error dictionary
-            return {
+            return [{
                 "action": "error",
                 "error": f"Unexpected error handling user input: {str(e)}",
                 "fallback_text": "An internal error occurred while processing your answer.",
                 "waiting_for_input": False,
                 "state_metadata": self._get_state_metadata(state) # Include metadata if possible
-            }
+            }]
 
     async def _execute_action(self, action: str, state: StudentState) -> AgentResponse:
         """

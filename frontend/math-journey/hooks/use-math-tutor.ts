@@ -256,9 +256,69 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       try { 
         // Send the message
         console.log("Sending message to server:", message);
-        await client.processInput(message, currentSession);
+        const response = await client.processInput(message, currentSession);
         
-        // Note: isProcessing will be set to false in handlePushedMessage when response arrives
+        // Check if response contains evaluation data (using our added custom properties)
+        // We need to use indexing since these aren't part of the official type
+        const hasEvaluation = !!(response as any).hasEvaluation;
+        const evaluationText = (response as any).evaluationText || "";
+        const isCorrect = !!(response as any).isCorrect;
+        
+        if (hasEvaluation) {
+          console.log("Response includes evaluation result - displaying feedback");
+          
+          // Set the evaluation received flag to trigger toast display
+          setIsEvaluationReceived(true);
+          
+          // Store the evaluation text in a ref for the toast component to access
+          // (instead of adding it directly to AgentOutput which would cause type errors)
+          if (typeof evaluationText === 'string' && evaluationText.trim()) {
+            // Store in a ref that the component can access
+            // If you don't have this ref already, you'd need to add:
+            // const evaluationTextRef = useRef<string>("");
+            // evaluationTextRef.current = evaluationText;
+            
+            // Alternatively, you can add this to global state if you have a state for it
+            // Or use a different property that exists in AgentOutput
+            
+            // For now, we can use the text field of the agent output as fallback
+            const combinedOutput: AgentOutput = {
+              ...response.agent_output,
+              evaluation: isCorrect ? "Correct" : "Incorrect", // Simplified evaluation state
+              // Store feedback text in the text field if it's not already populated
+              text: response.agent_output.text || evaluationText
+            };
+            
+            // Set agent output to show the content
+            setAgentOutput(combinedOutput);
+          } else {
+            // Just use the response as is if no evaluation text
+            setAgentOutput({
+              ...response.agent_output,
+              evaluation: isCorrect ? "Correct" : "Incorrect"
+            });
+          }
+          
+          // Update mastery level if available
+          if (response.mastery_level !== undefined) {
+            setMasteryLevel(response.mastery_level);
+          }
+          
+          // Turn off processing state as we've handled both parts
+          setIsProcessing(false);
+        } else {
+          // Standard response handling 
+          setIsEvaluationReceived(false);
+          setIsProcessing(false);
+          
+          if (response.agent_output) {
+            setAgentOutput(response.agent_output);
+          }
+          
+          if (response.mastery_level !== undefined) {
+            setMasteryLevel(response.mastery_level);
+          }
+        }
       } catch (err) {
         // Handle errors
         const error = err as Error; 
@@ -274,7 +334,7 @@ export function useMathTutor(options: UseMathTutorOptions = {}): UseMathTutorRet
       }
     }, [client, isProcessing, resetState]
   );
-
+  
   const requestContinue = useCallback(
     async (): Promise<void> => {
       const currentSession = client.getCurrentSessionId(); 

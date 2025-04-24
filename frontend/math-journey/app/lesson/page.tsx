@@ -12,17 +12,17 @@ import ReactMarkdown from "react-markdown";
 import { Volume2, Loader2, RefreshCw, AlertCircle } from "lucide-react";
 
 export default function LessonPage() {
-  // Use the TutorContext with the NEW isEvaluationReceived property
+  // Use the TutorContext
   const {
     sessionId,
     currentOutput, 
     isLoading: isTutorLoading,
-    isEvaluationReceived, // NEW property from the updated hook
+    isEvaluationReceived,
     masteryLevel,
     startSession,
     sendMessage,
     requestContinue,
-    clearEvaluationState, // NEW function from the updated hook
+    clearEvaluationState,
     error: tutorError,
   } = useTutor();
 
@@ -31,6 +31,11 @@ export default function LessonPage() {
   const [learningPath, setLearningPath] = useState("");
   const [learningTheme, setLearningTheme] = useState("");
   const [userAnswer, setUserAnswer] = useState("");
+  const [evaluationToast, setEvaluationToast] = useState<{
+    isCorrect: boolean;
+    text: string;
+    showing: boolean;
+  }>({ isCorrect: false, text: "", showing: false });
   const [errorState, setErrorState] = useState<{ isError: boolean; message: string }>({
     isError: false,
     message: "",
@@ -44,6 +49,7 @@ export default function LessonPage() {
   const userInfoLoadedRef = useRef(false);
   const toastShownRef = useRef(false);
   const autoTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const evaluationTextRef = useRef<string>("");
 
   // --- useEffect Hooks ---
 
@@ -108,21 +114,24 @@ export default function LessonPage() {
     }
   }, []);
 
-  // --- CRITICAL EFFECT: Handle evaluation responses and toast display ---
+  // --- UPDATED: Handle evaluation responses and toast display ---
   useEffect(() => {
-    // When an evaluation is received, show toast and set up auto-continue
+    // When an evaluation is received, show toast but do NOT set up auto-continue
+    // (the content is already there - we just need to show the toast)
     if (isEvaluationReceived && currentOutput && currentOutput.evaluation) {
-      console.log("🔔 Showing evaluation toast and setting up auto-continue");
+      console.log("🔔 Showing evaluation toast for existing content");
       
-      // Cancel any existing auto-continue timer
+      // Cancel any existing auto-continue timer (safety check)
       if (autoTimerRef.current) {
         clearTimeout(autoTimerRef.current);
+        autoTimerRef.current = null;
       }
 
       // Only show toast if not shown already for this evaluation 
       if (!toastShownRef.current) {
         const isCorrect = currentOutput.evaluation === EvaluationResult.CORRECT;
         const toastDuration = 4000; // 4 seconds duration
+        const toastText = evaluationTextRef.current || currentOutput.text || (isCorrect ? "Correct!" : "Not quite right");
         
         // Show a large, prominent custom toast in the top center
         if (isCorrect) {
@@ -132,7 +141,7 @@ export default function LessonPage() {
                 <CheckCircledIcon className="text-green-600 h-5 w-5 mt-0.5 mr-3 flex-shrink-0" />
                 <div>
                   <p className="font-bold text-green-800">Correct!</p>
-                  <p className="text-green-700">{currentOutput.text || "Great job!"}</p>
+                  <p className="text-green-700">{toastText}</p>
                 </div>
               </div>
             </div>
@@ -144,7 +153,7 @@ export default function LessonPage() {
                 <CrossCircledIcon className="text-orange-600 h-5 w-5 mt-0.5 mr-3 flex-shrink-0" />
                 <div>
                   <p className="font-bold text-orange-800">Not quite right</p>
-                  <p className="text-orange-700">{currentOutput.text || "Try again."}</p>
+                  <p className="text-orange-700">{toastText}</p>
                 </div>
               </div>
             </div>
@@ -154,31 +163,24 @@ export default function LessonPage() {
         // Mark that we've shown a toast for this evaluation
         toastShownRef.current = true;
         
-        // Play audio if available
+        // Play audio if available (from evaluation)
         if (currentOutput.audio_url) {
           setTimeout(() => playAudio(currentOutput.audio_url), 100);
         }
         
-        // Schedule auto-continue after toast duration plus buffer
-        autoTimerRef.current = setTimeout(() => {
-          console.log("Auto-continue timer fired, now requesting continue");
-          requestContinue().catch(error => {
-            console.error("Error in auto-continue:", error);
-          });
-        }, toastDuration + 500); // Extra time after toast
+        // CRITICAL FIX: No auto-continue timer here!
+        // We already have the next content
       }
     } else {
       // Reset toast shown ref when there's no evaluation
       toastShownRef.current = false;
     }
     
-    // Clear the evaluation state when the component unmounts
-    return () => {
-      if (autoTimerRef.current) {
-        clearTimeout(autoTimerRef.current);
-      }
-    };
-  }, [isEvaluationReceived, currentOutput, playAudio, requestContinue]);
+    // Reset evaluation text when not in evaluation mode
+    if (!isEvaluationReceived) {
+      evaluationTextRef.current = "";
+    }
+  }, [isEvaluationReceived, currentOutput, playAudio]);
 
   // Effect to handle media updates for non-evaluation content
   useEffect(() => {
@@ -291,21 +293,21 @@ export default function LessonPage() {
   // We rely on the hook to properly manage loading state (not showing loading during evaluation)
   const isLoading = isTutorLoading;
 
-  // SIMPLIFIED: Button/input visibility logic
-  // The evaluation state is now handled directly by the hook
+  // UPDATED: Button/input visibility logic
+  // Show answer input even during evaluation display, but disable it
   const showAnswerInput = 
     currentOutput?.prompt_for_answer && 
     !isLoading && 
-    !errorState.isError && 
-    !isEvaluationReceived;
+    !errorState.isError;
     
+  // CRITICAL FIX: Never show continue button during evaluation!  
   const showContinueButton = 
     currentOutput && 
     !currentOutput.prompt_for_answer && 
     !currentOutput.is_final_step && 
     !isLoading && 
     !errorState.isError && 
-    !isEvaluationReceived;
+    !isEvaluationReceived; // Never show during evaluation
 
   // Debug info
   const debugInfo = {
@@ -436,7 +438,7 @@ export default function LessonPage() {
                   )}
                 </div>
                 
-                {/* Bottom Area - Input or Continue Button - Only show when not in evaluation mode */}
+                {/* Bottom Area - Input or Continue Button */}
                 <div className="mt-auto pt-4 flex-shrink-0">
                   {/* Input Area */}
                   {showAnswerInput && (

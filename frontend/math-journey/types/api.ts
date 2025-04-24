@@ -108,6 +108,24 @@ export interface AgentOutput {
   state_metadata?: any; // Added to store metadata from backend
 }
 
+/**
+ * Extend the ProcessInputResponse to include evaluation information
+ */
+export interface ProcessInputResponseExtended extends ProcessInputResponse {
+  // These are the extended properties for evaluation data
+  hasEvaluation?: boolean;
+  evaluationText?: string;
+  isCorrect?: boolean;
+}
+
+/**
+ * Optional: Extend AgentOutput to add the evaluation text field
+ * if you need it frequently (requires updating many interfaces)
+ */
+export interface AgentOutputExtended extends AgentOutput {
+  evaluation_text?: string;
+}
+
 // Mensaje WebSocket
 export interface WebSocketMessage {
   type: string;

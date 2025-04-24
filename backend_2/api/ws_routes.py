@@ -140,48 +140,40 @@ async def websocket_session_endpoint(websocket: WebSocket, session_id: str):
                 if action == "submit_answer":
                     answer = data_payload.get("answer") # Get answer, check type later
                     if not isinstance(answer, str):
-                         print(f"Invalid answer format received: {type(answer)}")
-                         await send_json_to_websocket(websocket, {"type": "error", "message": "Invalid answer format (must be string).", "requestId": request_id})
-                         continue # Skip processing this message
+                        print(f"Invalid answer format received: {type(answer)}")
+                        await send_json_to_websocket(websocket, {"type": "error", "message": "Invalid answer format (must be string).", "requestId": request_id})
+                        continue # Skip processing this message
 
-                    # --- REVERTED BACKEND LOGIC ---
-                    # Agent handles evaluation AND determines next step (if backend wasn't fixed)
-                    # OR Agent just evaluates (if backend WAS fixed) - this code handles both cases by checking the result type
-                    # Let's assume handle_user_input returns a list now, like it did when things "flowed"
-                    # If handle_user_input ONLY returns eval, this block needs adjustment
-                    # For now, assume it might return multiple results (evaluation + next step)
-
-                    # --- REVERTED: Expecting list or single dict, handle both ---
+                    # Call the updated handle_user_input method which returns both evaluation and next step
+                    print(f"Calling handle_user_input with answer: '{answer}'")
                     raw_results = await learning_agent.handle_user_input(session_id, answer)
 
                     # Ensure raw_results is a list for send_agent_responses
-                    results_list: List[Dict[str, Any]]
+                    results_list = []
                     if isinstance(raw_results, list):
                         results_list = raw_results
                     elif isinstance(raw_results, dict):
-                         results_list = [raw_results] # Wrap single dict in list
+                        results_list = [raw_results] # Wrap single dict in list
                     else:
-                         print(f"ERROR: Unexpected result type from handle_user_input: {type(raw_results)}")
-                         # Send an error back?
-                         await send_json_to_websocket(websocket, {"type": "error", "message": "Internal server error processing answer.", "requestId": request_id})
-                         continue
+                        print(f"ERROR: Unexpected result type from handle_user_input: {type(raw_results)}")
+                        # Send an error back
+                        await send_json_to_websocket(websocket, {"type": "error", "message": "Internal server error processing answer.", "requestId": request_id})
+                        continue
 
                     # Send the main agent response(s)
                     await send_agent_responses(websocket, results_list, request_id)
 
-                    # --- RE-ADD POTENTIAL FOLLOW-UP LOGIC (that might have caused overlap) ---
                     # Check if the *last* result was an evaluation to potentially send a follow-up
-                    # This might be needed if the frontend relies on it to unblock
                     if results_list:
                         last_result = results_list[-1]
                         # Check if evaluation was the LAST action sent in this batch
                         if last_result.get("action") == "evaluation_result":
-                             # Check if the evaluation requires input (it shouldn't based on latest fixes)
-                             if not last_result.get("waiting_for_input", False):
+                            # Check if the evaluation requires input (it shouldn't based on latest fixes)
+                            if not last_result.get("waiting_for_input", False):
                                 print(f"DEBUG: Evaluation result sent, and it doesn't require input. Frontend should handle progression via 'continue'.")
                                 # No longer sending continuation_ready automatically here.
-                             else:
-                                 print(f"DEBUG: Evaluation result sent, and it requires input (unexpected).")
+                            else:
+                                print(f"DEBUG: Evaluation result sent, and it requires input (unexpected).")
 
                 elif action == "continue":
                     print(f"WS received 'continue', calling agent.process_step for session {session_id}")
@@ -227,8 +219,8 @@ async def websocket_session_endpoint(websocket: WebSocket, session_id: str):
                 await send_json_to_websocket(websocket, {"type": "error", "message": "Formato de mensaje inválido (no es JSON)."})
                 # No request_id available if JSON parsing failed
             except WebSocketDisconnect:
-                 print(f"WebSocketDisconnect received inside loop for conn {connection_id}.")
-                 raise # Re-raise to be caught by the outer try/except for cleanup
+                print(f"WebSocketDisconnect received inside loop for conn {connection_id}.")
+                raise # Re-raise to be caught by the outer try/except for cleanup
             except Exception as e:
                 # Catch unexpected errors during message processing
                 print(f"Error processing message from conn {connection_id} (reqId: {request_id}):")
@@ -239,7 +231,6 @@ async def websocket_session_endpoint(websocket: WebSocket, session_id: str):
                     "message": f"Error procesando su solicitud: {str(e)}",
                     "requestId": request_id # Include ID if available
                 })
-
     # Handle disconnection or major errors outside the main loop
     except WebSocketDisconnect:
         print(f"WS connection {connection_id} disconnected for session {session_id}")

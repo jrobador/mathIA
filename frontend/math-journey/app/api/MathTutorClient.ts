@@ -375,92 +375,123 @@ class MathTutorClient {
   ): Promise<ProcessInputResponse> {
     if (this.processingRequest) {
       console.warn("Request already in progress, please wait.");
-      // Decide whether to throw an error or just return a specific status
       throw new Error("Una solicitud ya está en progreso. Por favor espere.");
     }
-
+  
     const targetSessionId = sessionId || this.currentSessionId;
     if (!targetSessionId) {
       console.error("No active session ID available for processInput.");
       throw new Error("No hay una sesión activa. Inicie una sesión primero.");
     }
-
+  
     this.processingRequest = true;
-
+  
     // Prefer WebSocket
     if (this.isWebSocketConnected()) {
-        console.log(`Sending input via WebSocket for session ${targetSessionId}`);
-        return new Promise<ProcessInputResponse>((resolve, reject) => {
-            const requestId = uuidv4(); // Use a robust UUID
-
-            const timeoutHandle = setTimeout(() => {
-                if (this.messageCallbacks.has(requestId)) {
-                    this.messageCallbacks.delete(requestId);
-                    console.error(`Timeout waiting for response to input request ${requestId}`);
-                    this.processingRequest = false; // Unlock on timeout
-                    reject(new Error("Tiempo de espera agotado para procesar la entrada."));
-                }
-            }, 60000);
-
-            this.messageCallbacks.set(requestId, (response) => {
-                clearTimeout(timeoutHandle); // Clear timeout on response
-                this.messageCallbacks.delete(requestId); // Clean up callback
-                this.processingRequest = false; // Unlock after processing
-
-                console.log(`Received WS response for request ${requestId}:`, response);
-
-                if (response.type === "error") {
-                    reject(new Error(response.message || "Error procesando la entrada desde el servidor."));
-                } else if (response.type === "agent_response") {
-                     // The backend now sends the response(s) in response.data
-                    const agentData = response.data; // This might be a single response or a list
-
-                    // We need to format this into the expected ProcessInputResponse
-                    // Let's take the *last* agent response in the list if multiple were sent,
-                    // as that likely contains the most recent state.
-                    const relevantAgentData = Array.isArray(agentData) ? agentData[agentData.length - 1] : agentData;
-
-                    if (!relevantAgentData) {
-                         reject(new Error("Respuesta inválida del agente recibida."));
-                         return;
-                    }
-
-                    const inputResponse: ProcessInputResponse = {
-                        session_id: targetSessionId,
-                        agent_output: {
-                            text: relevantAgentData.text || "",
-                            image_url: relevantAgentData.image_url,
-                            audio_url: relevantAgentData.audio_url,
-                            prompt_for_answer: relevantAgentData.waiting_for_input ?? relevantAgentData.state_metadata?.waiting_for_input ?? false,
-                            evaluation: relevantAgentData.evaluation_type || relevantAgentData.last_evaluation || null, // Try multiple fields
-                            is_final_step: relevantAgentData.is_final_step || false,
-                        },
-                        mastery_level: relevantAgentData.state_metadata?.mastery ?? 0, // Get mastery from metadata
-                    };
-                    this._normalizeContentUrls(inputResponse.agent_output);
-                    resolve(inputResponse);
-                } else {
-                    console.warn("Received unexpected message type for input request:", response.type);
-                    reject(new Error(`Tipo de respuesta inesperado del servidor: ${response.type}`));
-                }
-            });
-
-            // Send the message
-            this.wsConnection?.send(
-                JSON.stringify({
-                    action: "submit_answer",
-                    requestId: requestId,
-                    data: {
-                        answer: message,
-                    },
-                })
-            );
-        }).catch(error => {
-            // Ensure lock is released on promise rejection as well
+      console.log(`Sending input via WebSocket for session ${targetSessionId}`);
+      return new Promise<ProcessInputResponse>((resolve, reject) => {
+        const requestId = uuidv4(); // Use a robust UUID
+        
+        // Track evaluation and next step responses
+        let evaluationResponse: any = null;
+        let nextStepResponse: any = null;
+        let responsesReceived = 0;
+        const expectedResponses = 2; // We expect two responses: evaluation + next step
+  
+        const timeoutHandle = setTimeout(() => {
+          if (this.messageCallbacks.has(requestId)) {
+            this.messageCallbacks.delete(requestId);
+            console.error(`Timeout waiting for response to input request ${requestId}`);
+            this.processingRequest = false; // Unlock on timeout
+            reject(new Error("Tiempo de espera agotado para procesar la entrada."));
+          }
+        }, 60000);
+  
+        this.messageCallbacks.set(requestId, (response) => {
+          console.log(`Received WS response for request ${requestId}:`, response);
+          
+          if (response.type === "error") {
+            clearTimeout(timeoutHandle);
+            this.messageCallbacks.delete(requestId);
             this.processingRequest = false;
-            throw error;
+            reject(new Error(response.message || "Error procesando la entrada desde el servidor."));
+            return;
+          } 
+          
+          if (response.type === "agent_response") {
+            const agentData = response.data;
+            
+            // Check which type of response this is
+            if (agentData.action === "evaluation_result") {
+              console.log("Received evaluation response");
+              evaluationResponse = agentData;
+              responsesReceived++;
+            } else {
+              console.log("Received next step response");
+              nextStepResponse = agentData;
+              responsesReceived++;
+            }
+            
+            // If we've received all expected responses, resolve the promise
+            if (responsesReceived >= expectedResponses || 
+                (responsesReceived === 1 && !evaluationResponse)) { // Handle case where backend sends only one response
+              
+              clearTimeout(timeoutHandle);
+              this.messageCallbacks.delete(requestId);
+              this.processingRequest = false;
+              
+              // Decide which response to use as the primary one for the UI
+              const primaryResponse = nextStepResponse || evaluationResponse;
+              
+              if (!primaryResponse) {
+                reject(new Error("Incomplete response received from server."));
+                return;
+              }
+              
+              // Create response object using the next step content but tracking evaluation state
+              const inputResponse: ProcessInputResponse = {
+                session_id: targetSessionId,
+                agent_output: {
+                  text: primaryResponse.text || "",
+                  image_url: primaryResponse.image_url,
+                  audio_url: primaryResponse.audio_url,
+                  prompt_for_answer: primaryResponse.waiting_for_input ?? primaryResponse.state_metadata?.waiting_for_input ?? false,
+                  // Use evaluation from evaluation response if available, otherwise from primary response
+                  evaluation: evaluationResponse?.evaluation_type || primaryResponse.evaluation_type || primaryResponse.last_evaluation || null,
+                  is_final_step: primaryResponse.is_final_step || false,
+                },
+                mastery_level: primaryResponse.state_metadata?.mastery ?? 0,
+              };
+              
+              // Add custom properties to the response object (will be accessible via indexing)
+              (inputResponse as any).hasEvaluation = !!evaluationResponse;
+              (inputResponse as any).evaluationText = evaluationResponse?.text || "";
+              (inputResponse as any).isCorrect = !!evaluationResponse?.is_correct;
+              
+              this._normalizeContentUrls(inputResponse.agent_output);
+              resolve(inputResponse);
+            }
+          } else {
+            // For other message types, just log but don't resolve/reject yet
+            console.warn("Received unexpected message type:", response.type);
+          }
         });
-
+  
+        // Send the message
+        this.wsConnection?.send(
+          JSON.stringify({
+            action: "submit_answer",
+            requestId: requestId,
+            data: {
+              answer: message,
+            },
+          })
+        );
+      }).catch(error => {
+        // Ensure lock is released on promise rejection as well
+        this.processingRequest = false;
+        throw error;
+      });
     } else {
       // Fallback to HTTP
       console.warn(`WebSocket not connected for session ${targetSessionId}. Using HTTP fallback for processInput.`);
@@ -473,7 +504,7 @@ class MathTutorClient {
             body: JSON.stringify({ answer: message }),
           }
         );
-
+  
         if (!response.ok) {
           let errorDetail = "Error procesando la entrada vía HTTP";
            try {
@@ -482,12 +513,14 @@ class MathTutorClient {
           } catch(e) { /* Ignore */ }
           throw new Error(errorDetail);
         }
-
-        const data = await response.json(); // Expects format similar to WS agent_response data
-
+  
+        const data = await response.json();
+  
         // Format the HTTP response to match ProcessInputResponse
-        const relevantAgentData = data.next_step ? data.next_step : data; // Use next_step if available, otherwise the main data
-
+        // Use next_step as primary response if available, otherwise use main data
+        const relevantAgentData = data.next_step ? data.next_step : data;
+        const evaluationData = data.next_step ? data : null; // If next_step exists, treat main data as evaluation
+  
         const inputResponse: ProcessInputResponse = {
             session_id: targetSessionId,
             agent_output: {
@@ -495,16 +528,21 @@ class MathTutorClient {
                 image_url: relevantAgentData.image_url,
                 audio_url: relevantAgentData.audio_url,
                 prompt_for_answer: relevantAgentData.waiting_for_input ?? relevantAgentData.state_metadata?.waiting_for_input ?? false,
-                evaluation: relevantAgentData.evaluation_type || relevantAgentData.last_evaluation || null,
+                evaluation: evaluationData?.evaluation_type || relevantAgentData.evaluation_type || relevantAgentData.last_evaluation || null,
                 is_final_step: relevantAgentData.is_final_step || false,
             },
             mastery_level: relevantAgentData.state_metadata?.mastery ?? 0,
         };
-
+  
+        // Add custom properties
+        (inputResponse as any).hasEvaluation = !!evaluationData;
+        (inputResponse as any).evaluationText = evaluationData?.text || "";
+        (inputResponse as any).isCorrect = !!evaluationData?.is_correct;
+  
         this._normalizeContentUrls(inputResponse.agent_output);
         this.processingRequest = false;
         return inputResponse;
-
+  
       } catch (error) {
         this.processingRequest = false;
         console.error("HTTP fallback for processInput failed:", error);
@@ -512,7 +550,6 @@ class MathTutorClient {
       }
     }
   }
-
 
   /**
    * Get the current status of a session via WebSocket (preferred) or HTTP fallback.
@@ -828,22 +865,17 @@ class MathTutorClient {
               }
             }
             
-            // Continue with the existing logging
-            console.log("DETAILED: WebSocket message received:", {
+            // Log message for debugging
+            console.log("WebSocket message received:", {
               type: data.type,
               requestId: data.requestId,
               callbacksAvailable: Array.from(this.messageCallbacks.keys()),
-              data: data
+              dataAction: data.data?.action || "none"
             });
         
             // Track if this is an agent response that modifies state
             const isAgentResponse = data.type === "agent_response";
-            const isEvaluationOrPractice = isAgentResponse && 
-              data.data && (
-                data.data.action === "evaluation_result" ||
-                data.data.action === "present_content"
-              );
-        
+            
             // 1. Check if it's a response to a specific request via requestId
             if (data.requestId && this.messageCallbacks.has(data.requestId)) {
               console.log(`Processing callback for requestId: ${data.requestId}`);
@@ -854,19 +886,27 @@ class MathTutorClient {
               // Call the callback with the data
               callback?.(data);
               
-              // Only delete the callback if this is NOT an evaluation response
-              // Evaluation responses are typically followed by next practice problems
+              // For evaluation responses, keep the callback for the next message
               if (isAgentResponse && data.data?.action === "evaluation_result") {
-                console.log(`Keeping callback for requestId: ${data.requestId} to handle follow-up content`);
-                // Don't delete the callback yet, as we expect more responses with the same ID
+                console.log(`Keeping callback for requestId: ${data.requestId} as it's an evaluation response`);
+                // Don't delete the callback yet, as we expect the next step content with the same ID
+              } else if (isAgentResponse && data.data?.action === "present_content") {
+                // If we get a content message after an evaluation, it's a follow-up
+                // Check if the callback is still registered (means we processed eval already)
+                if (this.messageCallbacks.has(data.requestId)) {
+                  console.log(`Processing content after evaluation for requestId: ${data.requestId}`);
+                  // We can now remove the callback after the complete sequence
+                  this.messageCallbacks.delete(data.requestId);
+                }
               } else {
+                // For non-evaluation responses, clean up the callback immediately
                 console.log(`Removing callback for requestId: ${data.requestId} after processing`);
                 this.messageCallbacks.delete(data.requestId);
               }
             } 
             // 2. If it might be related to a submit_answer but missing requestId
             else if (isAgentResponse && this.processingRequest) {
-              console.log("Received agent_response without requestId during active request, trying to match");
+              console.log("Received agent_response during active request, trying to match");
               
               // Find pending callbacks (newest first since that's likely the current request)
               const pendingRequestIds = Array.from(this.messageCallbacks.keys());
@@ -878,7 +918,7 @@ class MathTutorClient {
                 const callback = this.messageCallbacks.get(latestRequestId);
                 callback?.(data);
                 
-                // Only delete the callback if this is NOT an evaluation response
+                // For evaluation responses, keep the callback for the next message
                 if (isAgentResponse && data.data?.action === "evaluation_result") {
                   console.log(`Keeping callback for matched request: ${latestRequestId}`);
                   // Keep the callback for follow-up messages
@@ -888,27 +928,7 @@ class MathTutorClient {
                 }
               }
             }
-            // 3. If the message is a follow-up to a previous response with same content type
-            else if (isEvaluationOrPractice && Array.from(this.messageCallbacks.keys()).length > 0) {
-              console.log("Trying to route follow-up evaluation/practice message to existing callback");
-              
-              // Get the most recent callback
-              const requestIds = Array.from(this.messageCallbacks.keys());
-              const mostRecentId = requestIds[requestIds.length - 1];
-              
-              if (mostRecentId) {
-                const callback = this.messageCallbacks.get(mostRecentId);
-                console.log(`Routing follow-up to most recent callback: ${mostRecentId}`);
-                callback?.(data);
-                
-                // After a practice problem, we can finally remove the callback
-                if (data.data?.action === "present_content") {
-                  console.log(`Removing callback after practice content: ${mostRecentId}`);
-                  this.messageCallbacks.delete(mostRecentId);
-                }
-              }
-            }
-            // 4. If not a specific response, treat as a push/broadcast message
+            // 3. If not a specific response, treat as a push/broadcast message
             else {
               // For all other messages (like pongs), notify general handlers
               this.messageHandlers.forEach((handler) => {
@@ -922,7 +942,7 @@ class MathTutorClient {
             
             // After processing all messages, if this was the final practice content
             // and we're still in processing state, turn it off
-            if (isEvaluationOrPractice && 
+            if (isAgentResponse && 
                 data.data?.action === "present_content" && 
                 this.processingRequest) {
               console.log("Request cycle complete, releasing processingRequest lock");
@@ -933,7 +953,7 @@ class MathTutorClient {
             console.error("Error parsing message on session WebSocket:", error);
           }
         };
-
+        
         ws.onclose = (event) => {
           console.log(
             `Session WebSocket closed for ${this.currentSessionId}. Code: ${event.code}, Reason: '${event.reason}', Clean: ${event.wasClean}`
