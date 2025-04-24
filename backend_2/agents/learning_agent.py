@@ -206,73 +206,76 @@ class AdaptiveLearningAgent:
 
     async def handle_user_input(self, session_id: str, user_input: str) -> UserInputHandlingResponse:
         """
-        Procesa la entrada del usuario, evalúa la respuesta, y si no se
-        requiere más input, ejecuta el siguiente paso del agente automáticamente.
+        Processes user input by evaluating the answer.
+        CRITICAL: Returns ONLY the evaluation result dictionary.
+        The frontend client MUST explicitly request the next step via 'continue'.
 
         Args:
-            session_id: ID de la sesión
-            user_input: Entrada del usuario
+            session_id: ID of the session.
+            user_input: User's answer input.
 
         Returns:
-            Una lista de respuestas del agente. Típicamente contendrá:
-            1. El resultado de la evaluación.
-            2. (Si aplica) El resultado del siguiente paso del agente.
+            A dictionary representing the agent's evaluation response.
         """
+        print(f"[handle_user_input] START - session: {session_id}, input: '{user_input}'")
         state = self._get_session_state_object(session_id)
         if not state:
-            return [{"action": "error", "error": "Sesión no encontrada"}]
+            print(f"[handle_user_input] ERROR - Session not found: {session_id}")
+            return {"action": "error", "error": "Session not found"}
 
-        # Marcar la sesión como actualizada
+        # Update timestamp
         state.updated_at = datetime.now()
 
-        # Verificar si está esperando input
+        # Log warning if state wasn't waiting, but proceed
         if not state.waiting_for_input:
-             print(f"Warning: Received user input for session {session_id} when not waiting.")
-             # Decide how to handle this - ignore, error, or process anyway? Let's process anyway for robustness.
-             # return [{"action": "error", "error": "El agente no está esperando respuesta", "state_metadata": self._get_state_metadata(state)}]
-
-
-        results: UserInputHandlingResponse = []
+             print(f"[handle_user_input] Warning: Received input for session {session_id} when agent state.waiting_for_input was False.")
 
         try:
-            # 1. Evaluar la respuesta del usuario
-            # Note: evaluate_answer should set state.waiting_for_input = False
+            # --- Step 1: Evaluate the Answer ---
+            # The evaluate_answer function is responsible for:
+            # - Calling the LLM for evaluation.
+            # - Updating mastery, consecutive counts.
+            # - Adding messages to history.
+            # - Setting state.waiting_for_input = False (IMPORTANT!)
+            # - Returning the evaluation result dictionary.
+            print(f"[handle_user_input] Calling evaluate_answer...")
             eval_result = await evaluate_answer(state, user_input)
-            eval_result["state_metadata"] = self._get_state_metadata(state) # Add metadata
-            eval_result["waiting_for_input"] = state.waiting_for_input # Reflect state after eval
-            results.append(eval_result)
+            print(f"[handle_user_input] evaluate_answer returned: {eval_result.get('action')}, correct: {eval_result.get('is_correct')}")
 
-            # Check for evaluation errors before proceeding
+            # --- Step 2: Add Metadata ---
+            # Add metadata AFTER evaluation is complete and state might have changed
+            eval_result["state_metadata"] = self._get_state_metadata(state)
+            # Reflect the definitive state *after* evaluate_answer ran
+            eval_result["waiting_for_input"] = state.waiting_for_input # Should be False
+
+            # --- Step 3: Check for Errors during Evaluation ---
             if eval_result.get("action") == "error":
-                return results # Return immediately if evaluation failed
+                print(f"[handle_user_input] Error occurred within evaluate_answer. Returning error result.")
+                # Ensure waiting_for_input is False even on evaluation error
+                eval_result["waiting_for_input"] = False
+                return eval_result # Return the error dictionary from evaluate_answer
 
-            # 2. Si la evaluación NO resultó en esperar input, procesar el siguiente paso
-            if not state.waiting_for_input:
-                print(f"Session {session_id}: Not waiting for input after evaluation, processing next step.")
-                next_step_result = await self.process_step(session_id)
-                # Ensure metadata and waiting status are updated for the second step too
-                next_step_result["state_metadata"] = self._get_state_metadata(state)
-                next_step_result["waiting_for_input"] = state.waiting_for_input
-                results.append(next_step_result)
-            else:
-                 print(f"Session {session_id}: Waiting for input after evaluation.")
-
-
-            return results
+            # --- Step 4: Return ONLY the Evaluation Result ---
+            # DO NOT CALL process_step or determine_next_step here.
+            print(f"[handle_user_input] SUCCESS - Returning evaluation result ONLY for session {session_id}. Frontend must send 'continue'.")
+            return eval_result # Return the single dictionary
 
         except Exception as e:
             import traceback
+            # Catch unexpected errors within handle_user_input itself
+            print(f"[handle_user_input] UNEXPECTED ERROR for session {session_id}: {e}")
             traceback.print_exc()
             state.last_action_type = "error"
-            # Return an error message as the last item in the list
-            results.append({
+            state.waiting_for_input = False # Ensure state consistency on error
+            state.updated_at = datetime.now()
+            # Return a standard error dictionary
+            return {
                 "action": "error",
-                "error": f"Error handling user input for session {session_id}: {str(e)}",
-                "fallback_text": "Hubo un error procesando tu respuesta.",
-                "state_metadata": self._get_state_metadata(state)
-            })
-            return results
-
+                "error": f"Unexpected error handling user input: {str(e)}",
+                "fallback_text": "An internal error occurred while processing your answer.",
+                "waiting_for_input": False,
+                "state_metadata": self._get_state_metadata(state) # Include metadata if possible
+            }
 
     async def _execute_action(self, action: str, state: StudentState) -> AgentResponse:
         """

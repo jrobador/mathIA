@@ -137,7 +137,6 @@ async def websocket_session_endpoint(websocket: WebSocket, session_id: str):
 
                 print(f"Received action '{action}' for session {session_id} (conn: {connection_id}, reqId: {request_id})")
 
-                # Process actions based on client message
                 if action == "submit_answer":
                     answer = data_payload.get("answer") # Get answer, check type later
                     if not isinstance(answer, str):
@@ -145,51 +144,49 @@ async def websocket_session_endpoint(websocket: WebSocket, session_id: str):
                          await send_json_to_websocket(websocket, {"type": "error", "message": "Invalid answer format (must be string).", "requestId": request_id})
                          continue # Skip processing this message
 
-                    # Agent handles evaluation and determines next steps
-                    results: List[Dict[str, Any]] = await learning_agent.handle_user_input(session_id, answer)
-                    # Send agent response(s) back, including the original request ID
-                    await send_agent_responses(websocket, results, request_id)
+                    # --- REVERTED BACKEND LOGIC ---
+                    # Agent handles evaluation AND determines next step (if backend wasn't fixed)
+                    # OR Agent just evaluates (if backend WAS fixed) - this code handles both cases by checking the result type
+                    # Let's assume handle_user_input returns a list now, like it did when things "flowed"
+                    # If handle_user_input ONLY returns eval, this block needs adjustment
+                    # For now, assume it might return multiple results (evaluation + next step)
 
-                    if results and len(results) > 0:
-                        last_result = results[-1]  # Get the last result
+                    # --- REVERTED: Expecting list or single dict, handle both ---
+                    raw_results = await learning_agent.handle_user_input(session_id, answer)
+
+                    # Ensure raw_results is a list for send_agent_responses
+                    results_list: List[Dict[str, Any]]
+                    if isinstance(raw_results, list):
+                        results_list = raw_results
+                    elif isinstance(raw_results, dict):
+                         results_list = [raw_results] # Wrap single dict in list
+                    else:
+                         print(f"ERROR: Unexpected result type from handle_user_input: {type(raw_results)}")
+                         # Send an error back?
+                         await send_json_to_websocket(websocket, {"type": "error", "message": "Internal server error processing answer.", "requestId": request_id})
+                         continue
+
+                    # Send the main agent response(s)
+                    await send_agent_responses(websocket, results_list, request_id)
+
+                    # --- RE-ADD POTENTIAL FOLLOW-UP LOGIC (that might have caused overlap) ---
+                    # Check if the *last* result was an evaluation to potentially send a follow-up
+                    # This might be needed if the frontend relies on it to unblock
+                    if results_list:
+                        last_result = results_list[-1]
+                        # Check if evaluation was the LAST action sent in this batch
                         if last_result.get("action") == "evaluation_result":
-                            print(f"DEBUG: Sending follow-up 'present_content' after evaluation for requestId: {request_id}")
-                            
-                            # Create a completion message to unblock the frontend
-                            completion_message = {
-                                "action": "present_content",
-                                "content_type": "continuation_ready",
-                                "text": "",  # Empty text is fine
-                                "requires_input": False,
-                                "is_final_step": True,
-                                "waiting_for_input": True,
-                                "state_metadata": last_result.get("state_metadata", {})
-                            }
-                            
-                            # Small delay to ensure proper sequence
-                            await asyncio.sleep(0.1)
-                            
-                            # Send the completion message with the same requestId
-                            await send_agent_responses(websocket, [completion_message], request_id)
+                             # Check if the evaluation requires input (it shouldn't based on latest fixes)
+                             if not last_result.get("waiting_for_input", False):
+                                print(f"DEBUG: Evaluation result sent, and it doesn't require input. Frontend should handle progression via 'continue'.")
+                                # No longer sending continuation_ready automatically here.
+                             else:
+                                 print(f"DEBUG: Evaluation result sent, and it requires input (unexpected).")
 
                 elif action == "continue":
-                    # Get the current state to check if it's waiting for input
-                    state_data = learning_agent.get_session_state(session_id)
-                    
-                    if state_data and state_data.get("waiting_for_input", False):
-                        # If waiting for input, send a message telling the frontend to show 
-                        # an input form instead of just pausing
-                        result = {
-                            "action": "require_input",
-                            "message": "Please provide an answer for this problem",
-                            "content_type": "input_required",
-                            "waiting_for_input": True,
-                            "state_metadata": state_data
-                        }
-                    else:
-                        # Normal case: not waiting for input, proceed with next step
-                        result = await learning_agent.process_step(session_id)
-                    
+                    print(f"WS received 'continue', calling agent.process_step for session {session_id}")
+                    result = await learning_agent.process_step(session_id)
+
                     # Send response back with the request ID
                     await send_agent_responses(websocket, [result], request_id)
 
