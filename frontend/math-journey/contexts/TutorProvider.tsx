@@ -51,12 +51,14 @@ interface TutorContextType {
   currentOutput: AgentOutput | null;
   masteryLevel: number;
   isConnected: boolean;
+  isEvaluationReceived: boolean; // NEW property exposed
   error?: Error | null;
 
   startSession: (options: StartSessionOptions) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   requestContinue: () => Promise<void>; // Function exposed by the context
   endSession: () => Promise<void>;
+  clearEvaluationState: () => void; // NEW function exposed
   clearMessages: () => void;
   prepareForUnmount: () => void;
 }
@@ -79,11 +81,13 @@ export function TutorProvider({ children }: TutorProviderProps): JSX.Element {
     isLoading,
     masteryLevel,
     isConnected,
+    isEvaluationReceived, // NEW state from hook
     error,
     startSession: startTutorSession, // Renamed from hook
     sendMessage: sendTutorMessage, // Renamed from hook
     requestContinue: requestTutorContinue, // Renamed from hook
     endSession: endTutorSession, // Renamed from hook
+    clearEvaluationState: clearTutorEvaluationState, // NEW function from hook
     prepareForUnmount, // Pass through directly
   } = useMathTutor();
 
@@ -167,6 +171,11 @@ export function TutorProvider({ children }: TutorProviderProps): JSX.Element {
     setMessages([]);
   }, []); // No dependencies
 
+  // Function to clear evaluation state
+  const clearEvaluationState = useCallback((): void => {
+    clearTutorEvaluationState(); // Just pass through to the hook
+  }, [clearTutorEvaluationState]);
+
 
   // Create the context value object
   const value: TutorContextType = {
@@ -176,11 +185,13 @@ export function TutorProvider({ children }: TutorProviderProps): JSX.Element {
     currentOutput: agentOutput, // Pass agentOutput directly
     masteryLevel,
     isConnected,
+    isEvaluationReceived, // NEW: Expose the evaluation state from hook
     error,
     startSession,
     sendMessage,
     requestContinue, // Expose the context's requestContinue function
     endSession,
+    clearEvaluationState, // NEW: Expose the evaluation clear function
     clearMessages,
     prepareForUnmount, // Pass through directly
   };
