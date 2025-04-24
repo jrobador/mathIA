@@ -117,7 +117,6 @@ export default function LessonPage() {
   // --- UPDATED: Handle evaluation responses and toast display ---
   useEffect(() => {
     // When an evaluation is received, show toast but do NOT set up auto-continue
-    // (the content is already there - we just need to show the toast)
     if (isEvaluationReceived && currentOutput && currentOutput.evaluation) {
       console.log("🔔 Showing evaluation toast for existing content");
       
@@ -126,14 +125,13 @@ export default function LessonPage() {
         clearTimeout(autoTimerRef.current);
         autoTimerRef.current = null;
       }
-
+  
       // Only show toast if not shown already for this evaluation 
       if (!toastShownRef.current) {
         const isCorrect = currentOutput.evaluation === EvaluationResult.CORRECT;
-        const toastDuration = 4000; // 4 seconds duration
-        const toastText = evaluationTextRef.current || currentOutput.text || (isCorrect ? "Correct!" : "Not quite right");
+        const toastDuration = 7000;
         
-        // Show a large, prominent custom toast in the top center
+        // Show a simple toast with predefined messages
         if (isCorrect) {
           toast.custom((id) => (
             <div className="bg-green-100 border-l-4 border-green-500 p-4 rounded shadow-lg">
@@ -141,7 +139,7 @@ export default function LessonPage() {
                 <CheckCircledIcon className="text-green-600 h-5 w-5 mt-0.5 mr-3 flex-shrink-0" />
                 <div>
                   <p className="font-bold text-green-800">Correct!</p>
-                  <p className="text-green-700">{toastText}</p>
+                  <p className="text-green-700">Great job! You got it right.</p>
                 </div>
               </div>
             </div>
@@ -153,7 +151,7 @@ export default function LessonPage() {
                 <CrossCircledIcon className="text-orange-600 h-5 w-5 mt-0.5 mr-3 flex-shrink-0" />
                 <div>
                   <p className="font-bold text-orange-800">Not quite right</p>
-                  <p className="text-orange-700">{toastText}</p>
+                  <p className="text-orange-700">Try again with a different approach.</p>
                 </div>
               </div>
             </div>
@@ -167,18 +165,10 @@ export default function LessonPage() {
         if (currentOutput.audio_url) {
           setTimeout(() => playAudio(currentOutput.audio_url), 100);
         }
-        
-        // CRITICAL FIX: No auto-continue timer here!
-        // We already have the next content
       }
     } else {
       // Reset toast shown ref when there's no evaluation
       toastShownRef.current = false;
-    }
-    
-    // Reset evaluation text when not in evaluation mode
-    if (!isEvaluationReceived) {
-      evaluationTextRef.current = "";
     }
   }, [isEvaluationReceived, currentOutput, playAudio]);
 
@@ -299,6 +289,9 @@ export default function LessonPage() {
     currentOutput?.prompt_for_answer && 
     !isLoading && 
     !errorState.isError;
+
+  const answerInputDisabled = isEvaluationReceived;
+
     
   // CRITICAL FIX: Never show continue button during evaluation!  
   const showContinueButton = 
@@ -467,7 +460,6 @@ export default function LessonPage() {
                                 : "bg-white/80 backdrop-blur-sm border-indigo-100/60 hover:bg-indigo-50/90"
                             }`} 
                             onClick={() => handleNumberInput(btn.toString())} 
-                            disabled={isLoading || isEvaluationReceived}
                           >
                             {btn === "backspace" ? "⌫" : btn === "clear" ? "Clear" : btn}
                           </Button>
@@ -480,7 +472,6 @@ export default function LessonPage() {
                           size="lg" 
                           onClick={handleSubmitAnswer} 
                           className={`${themeStyles.buttonColor} text-white px-8 py-3 rounded-full text-lg shadow-lg transition-all duration-300 hover:scale-105 hover:shadow-xl border border-indigo-400/30`} 
-                          disabled={!userAnswer.trim() || isLoading || isEvaluationReceived}
                         >
                           {isLoading ? (
                             <>
