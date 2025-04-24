@@ -52,43 +52,79 @@ print(f"Prompts directory set to: {PROMPTS_DIR}")
 
 async def determine_next_step(state: StudentState) -> Dict[str, Any]:
     """
-    Determina el próximo paso basado en el estado actual
+    Determina el próximo paso basado en el estado actual con logging detallado
     """
     print(f"Ejecutando determine_next_step para session_id={state.session_id}")
     
-    # Si está esperando input, debe pausar
-    if state.waiting_for_input:
-        return {"action": "pause", "message": "Esperando respuesta del usuario"}
-    
-    # Lógica de decisión basada en el diagrama de flujo
+    # Detailed state logging
     mastery = state.topic_mastery.get(state.current_topic, 0.1)
     theory_presented = state.current_topic in state.theory_presented_for_topics
     
-    next_action = None
+    print(f"DEBUG determine_next_step - Estado actual:")
+    print(f"  - topic: {state.current_topic}")
+    print(f"  - mastery: {mastery:.2f}")
+    print(f"  - theory_presented: {theory_presented}")
+    print(f"  - consecutive_correct: {state.consecutive_correct}")
+    print(f"  - consecutive_incorrect: {state.consecutive_incorrect}")
+    print(f"  - last_evaluation: {state.last_evaluation}")
+    print(f"  - waiting_for_input: {state.waiting_for_input}")
+    print(f"  - last_action_type: {state.last_action_type}")
     
+    # Si está esperando input, debe pausar
+    if state.waiting_for_input:
+        print("  → Pausing execution: waiting_for_input = True")
+        return {"action": "pause", "message": "Esperando respuesta del usuario"}
+    
+    # Lógica de decisión basada en el diagrama de flujo
+    next_action = None
+    decision_reason = "Default" # Track why a decision was made
+    
+    # Evaluate conditions in priority order
     if mastery < 0.3 and not theory_presented:
         next_action = "present_theory"
+        decision_reason = f"mastery ({mastery:.2f}) < 0.3 and theory not presented"
     
     elif mastery < 0.3 and theory_presented:
         next_action = "present_guided_practice"
-    
-    elif 0.3 <= mastery <= 0.7:
-        next_action = "present_independent_practice"
+        decision_reason = f"mastery ({mastery:.2f}) < 0.3 and theory already presented"
     
     elif state.last_evaluation in [EvaluationOutcome.INCORRECT_CONCEPTUAL, EvaluationOutcome.INCORRECT_CALCULATION]:
         next_action = "provide_targeted_feedback"
+        decision_reason = f"last_evaluation is {state.last_evaluation}"
     
     elif state.consecutive_incorrect >= 3:
         next_action = "simplify_instruction"
+        decision_reason = f"consecutive_incorrect ({state.consecutive_incorrect}) >= 3"
     
-    elif mastery > 0.8 and state.consecutive_correct >= 2:
+    # MODIFIED: Added additional advancement condition with lower mastery threshold
+    elif (mastery > 0.7 and state.consecutive_correct >= 3) or (mastery > 0.8 and state.consecutive_correct >= 1):
         next_action = "check_advance_topic"
+        decision_reason = f"Advancement condition met: mastery = {mastery:.2f}, consecutive_correct = {state.consecutive_correct}"
+        print(f"DEBUG: Topic advancement triggered! mastery = {mastery:.2f}, consecutive_correct = {state.consecutive_correct}")
+    
+    elif 0.3 <= mastery <= 0.7:
+        next_action = "present_independent_practice"
+        decision_reason = f"mastery ({mastery:.2f}) between 0.3 and 0.7"
     
     # Por defecto, presentar práctica independiente
     else:
         next_action = "present_independent_practice"
+        decision_reason = f"Default case - mastery = {mastery:.2f}, not matching any other condition"
     
+    # Log detailed reason for decision
     print(f"determine_next_step decidió: {next_action}")
+    print(f"  → Reason: {decision_reason}")
+    
+    # Log evaluation of key conditions
+    print(f"DEBUG determine_next_step - Condiciones evaluadas:")
+    print(f"  - mastery < 0.3: {mastery < 0.3}")
+    print(f"  - theory_presented: {theory_presented}")
+    print(f"  - 0.3 <= mastery <= 0.7: {0.3 <= mastery <= 0.7}")
+    print(f"  - mastery > 0.7 & consecutive_correct >= 3: {mastery > 0.7 and state.consecutive_correct >= 3}")
+    print(f"  - mastery > 0.8 & consecutive_correct >= 1: {mastery > 0.8 and state.consecutive_correct >= 1}")
+    print(f"  - last_evaluation requires feedback: {state.last_evaluation in [EvaluationOutcome.INCORRECT_CONCEPTUAL, EvaluationOutcome.INCORRECT_CALCULATION]}")
+    print(f"  - consecutive_incorrect >= 3: {state.consecutive_incorrect >= 3}")
+    
     return {"action": next_action}
 
 async def present_theory(state: StudentState) -> Dict[str, Any]:
@@ -298,7 +334,7 @@ async def present_guided_practice(state: StudentState) -> Dict[str, Any]:
             "solution": solution_text,
             "type": "guided_practice",
             "difficulty": 0.3, # Dificultad baja para práctica guiada
-            "mastery_value": 0.3, # Incremento de dominio si es correcto
+            "mastery_value": 0.1, # Incremento de dominio si es correcto
             "mastery_penalty": 0.05 # Decremento de dominio si es incorrecto
         }
         
@@ -476,29 +512,16 @@ async def present_independent_practice(state: StudentState) -> Dict[str, Any]:
             "fallback_text": "No pude generar un problema de práctica independiente. Intentemos otro enfoque."
         }
 
-# backend_2/agents/functions.py
-
-import os
-import re
-from typing import Dict, Any
-
-# Assume these are imported correctly from elsewhere in the project
-from models.student_state import StudentState, EvaluationOutcome, add_message, update_mastery
-from services.azure_service import invoke_with_prompty, invoke_llm, generate_speech
-from agents.functions import PROMPTS_DIR # Assuming PROMPTS_DIR is correctly defined
-
 async def evaluate_answer(state: StudentState, user_answer: str) -> Dict[str, Any]:
     """
-    Evalúa la respuesta del usuario y actualiza el estado.
-    IMPORTANTE: Después de la evaluación, el agente debe decidir el siguiente paso,
-    por lo que `waiting_for_input` se establece en False.
+    Evalúa la respuesta del usuario mediante LLM y actualiza el estado.
+    Confía completamente en el juicio del LLM sin verificación determinística adicional.
     """
     print(f"Ejecutando evaluate_answer para respuesta='{user_answer}'")
 
     # Verificar que existan detalles del problema activo
     if not state.last_problem_details:
         print("Error en evaluate_answer: No hay problema activo para evaluar.")
-        # Reset state to avoid loops? Or let agent handle error? Let's return error for now.
         state.waiting_for_input = False # Ensure we are not stuck waiting
         return {
             "action": "error",
@@ -510,8 +533,10 @@ async def evaluate_answer(state: StudentState, user_answer: str) -> Dict[str, An
     # Obtener detalles del problema actual
     problem = state.last_problem_details
     problem_text = problem.get("problem", "")
+    
+    # We're not using the expected_solution for comparison, just logging it
     expected_solution = problem.get("solution", "")
-    print(f"Evaluating against expected solution: '{expected_solution}'")
+    print(f"Problem has expected solution: '{expected_solution}' (for reference only)")
 
     try:
         # --- LLM Call for Evaluation ---
@@ -520,30 +545,30 @@ async def evaluate_answer(state: StudentState, user_answer: str) -> Dict[str, An
 
         if os.path.exists(eval_template_path):
             print(f"Using evaluation prompty template: {eval_template_path}")
+            # Send only the problem and student answer to the LLM
             evaluation_result_str = await invoke_with_prompty(
                 eval_template_path,
                 problem=problem_text,
-                solution=expected_solution,
                 student_answer=user_answer
             )
         else:
-            print(f"Warning: Evaluation prompty template not found at {eval_template_path}. Using fallback.")
-            # Fallback a prompt directo si no hay plantilla
-            prompt = f"""Evaluate this student's answer:
+            print(f"Warning: Evaluation template not found. Using fallback.")
+            # Fallback direct prompt without expected solution
+            prompt = f"""Evaluate this student's answer to a math problem:
             Problem: {problem_text}
-            Expected Solution: {expected_solution}
             Student's Answer: {user_answer}
 
-            Evaluate if the answer is CORRECT, INCORRECT_CONCEPTUAL, or INCORRECT_CALCULATION.
+            Solve the problem yourself, then evaluate if the answer is CORRECT, INCORRECT_CONCEPTUAL, or INCORRECT_CALCULATION.
             IMPORTANT: Start your response with EXACTLY "[EVALUATION: X]" where X is one of:
             CORRECT, INCORRECT_CONCEPTUAL, INCORRECT_CALCULATION, UNCLEAR.
+            
+            Be strict in your evaluation. For numeric answers, they must match the expected value exactly.
             """
             system_message = "You are an expert educational tutor who accurately evaluates math answers."
             evaluation_result_str = await invoke_llm(prompt, system_message)
 
         # --- Parse LLM Evaluation Result ---
-        print(f"Raw evaluation result string: '{evaluation_result_str[:200]}...'") # Log raw output
-        evaluation_result_str = evaluation_result_str.strip().upper()
+        print(f"Raw evaluation result string: '{evaluation_result_str[:200]}...'")
         evaluation_result = EvaluationOutcome.UNCLEAR # Default
 
         # Buscar el formato específico [EVALUATION: X]
@@ -560,77 +585,61 @@ async def evaluate_answer(state: StudentState, user_answer: str) -> Dict[str, An
                 evaluation_result = EvaluationOutcome.INCORRECT_CALCULATION
             else: # UNCLEAR
                 evaluation_result = EvaluationOutcome.UNCLEAR
-            print(f"Parsed evaluation from tag: {evaluation_result.value}")
+            print(f"Parsed evaluation from tag: {result_type}")
         else:
-            # Fallback: Simple string comparison (less robust)
-            # Normalize strings for comparison
-            clean_solution = "".join(filter(str.isdigit, str(expected_solution))) # Extract digits
-            clean_answer = "".join(filter(str.isdigit, str(user_answer)))         # Extract digits
+            print(f"WARNING: Could not parse evaluation tag. Defaulting to UNCLEAR.")
+            evaluation_result = EvaluationOutcome.UNCLEAR
 
-            print(f"Regex failed. Comparing normalized strings: Solution='{clean_solution}', Answer='{clean_answer}'")
-
-            if clean_answer == clean_solution and clean_solution != "": # Check if digits match and are not empty
-                 evaluation_result = EvaluationOutcome.CORRECT
-                 print(f"Fallback evaluation: digit comparison matched solution")
-            # Check keywords in the LLM response as a last resort
-            elif "INCORRECT_CONCEPTUAL" in evaluation_result_str:
-                evaluation_result = EvaluationOutcome.INCORRECT_CONCEPTUAL
-                print(f"Fallback evaluation: found 'INCORRECT_CONCEPTUAL' keyword")
-            elif "INCORRECT_CALCULATION" in evaluation_result_str:
-                evaluation_result = EvaluationOutcome.INCORRECT_CALCULATION
-                print(f"Fallback evaluation: found 'INCORRECT_CALCULATION' keyword")
-            elif "CORRECT" in evaluation_result_str: # Be careful with this one
-                 evaluation_result = EvaluationOutcome.CORRECT
-                 print(f"Fallback evaluation: found 'CORRECT' keyword (use with caution)")
-            else:
-                # If unable to determine clearly, default to calculation error or unclear
-                print(f"WARNING: Could not parse evaluation result: '{evaluation_result_str[:100]}...' Defaulting to INCORRECT_CALCULATION.")
-                evaluation_result = EvaluationOutcome.INCORRECT_CALCULATION # Or UNCLEAR? Calculation seems safer
-
-        print(f"Final evaluation determined: {evaluation_result.value} for answer '{user_answer}' (expected: '{expected_solution}')")
+        print(f"Final evaluation determined: {evaluation_result.value} for answer '{user_answer}'")
 
         # --- Update Mastery and State ---
         old_mastery = state.topic_mastery.get(state.current_topic, 0.0)
 
         if evaluation_result == EvaluationOutcome.CORRECT:
-            mastery_increase = problem.get("mastery_value", 0.1) # Get increase value from problem details
+            mastery_increase = problem.get("mastery_value", 0.1)
             state.consecutive_correct += 1
             state.consecutive_incorrect = 0
             update_mastery(state, mastery_increase)
             feedback_text = "¡Correcto! Buen trabajo."
+            
+            # Additional logging for mastery progress
+            new_mastery = state.topic_mastery.get(state.current_topic, 0.0)
+            print(f"MASTERY UPDATE: Topic '{state.current_topic}' mastery increased from {old_mastery:.2f} to {new_mastery:.2f}")
+            print(f"PROGRESS: {'%.0f' % (new_mastery * 100)}% mastery, {state.consecutive_correct} consecutive correct")
         else:
-            mastery_decrease = problem.get("mastery_penalty", 0.05) # Get penalty value from problem details
+            mastery_decrease = problem.get("mastery_penalty", 0.05)
             state.consecutive_correct = 0
             state.consecutive_incorrect += 1
-            update_mastery(state, -mastery_decrease) # Apply decrease
+            update_mastery(state, -mastery_decrease)
             feedback_text = "Esa no es la respuesta correcta. Veamos por qué."
+            
+            # Log mastery decrease
+            new_mastery = state.topic_mastery.get(state.current_topic, 0.0)
+            print(f"MASTERY UPDATE: Topic '{state.current_topic}' mastery decreased from {old_mastery:.2f} to {new_mastery:.2f}")
 
         # Update state variables
         state.last_evaluation = evaluation_result
         state.last_action_type = "evaluate_answer"
-        # ** CRITICAL FIX: The agent determines the next step, not the user directly after eval.
         state.waiting_for_input = False
-        state.updated_at = datetime.now() # Ensure timestamp is updated
+        state.updated_at = datetime.now()
 
         # Add messages to history
         add_message(state, "human", user_answer)
-        add_message(state, "ai", feedback_text) # Add the simple feedback
+        add_message(state, "ai", feedback_text)
 
         # --- Generate Response ---
         audio_url = await generate_speech(feedback_text)
         new_mastery = state.topic_mastery.get(state.current_topic, 0.0)
 
         return {
-            "action": "evaluation_result", # Indicate the type of action completed
-            "evaluation_type": evaluation_result.value, # Pass the enum value
-            "text": feedback_text, # Simple feedback text
+            "action": "evaluation_result",
+            "evaluation_type": evaluation_result.value,
+            "text": feedback_text,
             "audio_url": audio_url,
             "is_correct": evaluation_result == EvaluationOutcome.CORRECT,
             "old_mastery": old_mastery,
             "new_mastery": new_mastery,
-             # ** CRITICAL FIX: Evaluation itself isn't the final step.
             "is_final_step": False,
-             # ** CRITICAL FIX: Reflect the state *after* this function completes.
             "waiting_for_input": False
         }
 
@@ -638,7 +647,6 @@ async def evaluate_answer(state: StudentState, user_answer: str) -> Dict[str, An
         print(f"Error in evaluate_answer: {e}")
         import traceback
         traceback.print_exc()
-        # Ensure state is consistent on error
         state.waiting_for_input = False
         state.last_action_type = "error"
         state.updated_at = datetime.now()
@@ -646,10 +654,9 @@ async def evaluate_answer(state: StudentState, user_answer: str) -> Dict[str, An
             "action": "error",
             "error": str(e),
             "fallback_text": "Hubo un problema al evaluar tu respuesta. Intentemos otro problema.",
-             # Ensure consistency on error
             "waiting_for_input": False
         }
-
+    
 async def provide_targeted_feedback(state: StudentState) -> Dict[str, Any]:
     """
     Proporciona retroalimentación específica basada en el tipo de error
