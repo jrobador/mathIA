@@ -30,7 +30,6 @@ export default function LessonPage() {
   const [learningPath, setLearningPath] = useState("");
   const [learningTheme, setLearningTheme] = useState("");
   const [userAnswer, setUserAnswer] = useState("");
-  // const [isLocalLoading, setIsLocalLoading] = useState(false); // isLoading from context is now sufficient
   const [errorState, setErrorState] = useState<{
     isError: boolean;
     message: string;
@@ -40,15 +39,17 @@ export default function LessonPage() {
   });
   const [audioKey, setAudioKey] = useState(Date.now());
   const [imageKey, setImageKey] = useState(Date.now());
+  // Add state to track if input is required (regardless of evaluation state)
+  const [forceInputRequired, setForceInputRequired] = useState(false);
+  const [lastActionType, setLastActionType] = useState<string | null>(null);
 
   // References
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const sessionStartAttemptedRef = useRef(false);
   const userInfoLoadedRef = useRef(false);
-  // const answerSubmitInProgressRef = useRef(false); // isLoading from context replaces this
 
   // --- Existing useEffect hooks (userInfo, tutorError, startSession, content changes) ---
-   // Load user info from localStorage
+  // Load user info from localStorage
   useEffect(() => {
     if (typeof window !== 'undefined' && !userInfoLoadedRef.current) {
       userInfoLoadedRef.current = true;
@@ -68,7 +69,6 @@ export default function LessonPage() {
   
       try {
         sessionStartAttemptedRef.current = true; // Mark attempt
-        // setIsLocalLoading(true); // Context isLoading should handle this
         console.log("Attempting to start new tutoring session...");
   
         // Get diagnostic results from localStorage to initialize the session properly
@@ -102,9 +102,7 @@ export default function LessonPage() {
           message: "Failed to start the learning session. Please try refreshing.",
         });
         toast.error("Failed to start session");
-         sessionStartAttemptedRef.current = false; // Allow retry on failure
-      } finally {
-        // setIsLocalLoading(false); // Context isLoading handles this
+        sessionStartAttemptedRef.current = false; // Allow retry on failure
       }
     };
   
@@ -119,8 +117,24 @@ export default function LessonPage() {
   useEffect(() => {
     if (currentOutput) {
       console.log("New content received:", currentOutput);
+      
+      // Check if the action_type indicates input required
+      if (currentOutput.action_type === "require_input") {
+        console.log("Force showing input form based on require_input action");
+        setForceInputRequired(true);
+      } else {
+        // Reset the force flag when we get a different action
+        setForceInputRequired(false);
+      }
+      
+      // Store the action type for reference in the UI logic
+      if (currentOutput.action_type) {
+        setLastActionType(currentOutput.action_type);
+      }
+      
       if (currentOutput.audio_url) setAudioKey(Date.now());
       if (currentOutput.image_url) setImageKey(Date.now());
+      
       // Clear local error state if we receive new content
       if (errorState.isError && !tutorError) {
          setErrorState({ isError: false, message: "" });
@@ -137,11 +151,10 @@ export default function LessonPage() {
     }
 
     try {
-      // answerSubmitInProgressRef.current = true; // Context isLoading replaces this
-      // setIsLocalLoading(true); // Context isLoading replaces this
       console.log("Submitting answer:", userAnswer);
       await sendMessage(userAnswer);
       setUserAnswer(""); // Clear input on successful send *request*
+      setForceInputRequired(false); // Reset the force flag after submitting
     } catch (error) {
       console.error("Error submitting answer:", error);
       setErrorState({
@@ -149,117 +162,138 @@ export default function LessonPage() {
         message: "Failed to send your answer. Please try again.",
       });
       toast.error("Failed to send answer");
-    } finally {
-      // setIsLocalLoading(false); // Context isLoading handles this
-      // answerSubmitInProgressRef.current = false; // Context isLoading replaces this
     }
   };
 
-  // --- ADDED: Handle Continue ---
+  // --- Handle Continue ---
   const handleContinue = async () => {
-      if (isTutorLoading) {
-          return; // Prevent multiple clicks while loading
+    if (isTutorLoading) {
+      return; // Prevent multiple clicks while loading
+    }
+    try {
+      console.log("Requesting continue...");
+      await requestContinue(); // Call the context function
+      
+      // If this was previously requiring input, reset that state
+      if (forceInputRequired) {
+        setForceInputRequired(false);
       }
-      try {
-          console.log("Requesting continue...");
-          await requestContinue(); // Call the context function
-      } catch (error) {
-          console.error("Error requesting continue:", error);
-          setErrorState({
-            isError: true,
-            message: "Failed to continue to the next step. Please try again.",
-          });
-          toast.error("Failed to continue");
-      }
+    } catch (error) {
+      console.error("Error requesting continue:", error);
+      setErrorState({
+        isError: true,
+        message: "Failed to continue to the next step. Please try again.",
+      });
+      toast.error("Failed to continue");
+    }
   };
 
   // --- (handleKeyPress, handleNumberInput, playAudio, handleRefresh - unchanged) ---
-    // Handle key press for submitting with enter
-    const handleKeyPress = (e: React.KeyboardEvent) => {
-        // Check if the input element is focused? Might not be needed if div has tabIndex
-        if (e.key === 'Enter' && currentOutput?.prompt_for_answer && userAnswer.trim() && !isTutorLoading) {
-          handleSubmitAnswer();
-        }
-      };
+  // Handle key press for submitting with enter
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    // Check if the input element is focused? Might not be needed if div has tabIndex
+    if (e.key === 'Enter' && (currentOutput?.prompt_for_answer || forceInputRequired) && userAnswer.trim() && !isTutorLoading) {
+      handleSubmitAnswer();
+    }
+  };
 
-      // Handle input for the number pad
-      const handleNumberInput = (input: string) => {
-        if (input === "clear") {
-          setUserAnswer("");
-        } else if (input === "backspace") {
-          setUserAnswer(prev => prev.slice(0, -1));
-        } else {
-          if (userAnswer.length < 10) { // Limit input length
-            setUserAnswer(prev => prev + input);
-          }
-        }
-      };
+  // Handle input for the number pad
+  const handleNumberInput = (input: string) => {
+    if (input === "clear") {
+      setUserAnswer("");
+    } else if (input === "backspace") {
+      setUserAnswer(prev => prev.slice(0, -1));
+    } else {
+      if (userAnswer.length < 10) { // Limit input length
+        setUserAnswer(prev => prev + input);
+      }
+    }
+  };
 
-      // Play audio function
-      const playAudio = () => {
-        if (audioRef.current) {
-          audioRef.current.play().catch(err => console.error("Error playing audio:", err));
-        }
-      };
+  // Play audio function
+  const playAudio = () => {
+    if (audioRef.current) {
+      audioRef.current.play().catch(err => console.error("Error playing audio:", err));
+    }
+  };
 
-      // Handle refresh
-      const handleRefresh = () => {
-        sessionStartAttemptedRef.current = false;
-        setErrorState({ isError: false, message: "" });
-        window.location.reload(); // Simple refresh
-      };
+  // Handle refresh
+  const handleRefresh = () => {
+    sessionStartAttemptedRef.current = false;
+    setErrorState({ isError: false, message: "" });
+    window.location.reload(); // Simple refresh
+  };
 
   // --- (progress calculation, theme styles - unchanged) ---
-      // Progress calculation
-    const progress = Math.round((masteryLevel || 0) * 100);
+  // Progress calculation
+  const progress = Math.round((masteryLevel || 0) * 100);
 
-    // Theme-based styling
-    const getThemeStyles = () => {
-        // ... (theme style definitions remain the same) ...
-        switch (learningTheme) {
-          case "magic":
-            return {
-              primaryColor: "text-purple-700",
-              bgGradient: "from-purple-50 to-indigo-100",
-              accentColor: "bg-purple-600",
-              buttonColor: "bg-purple-600 hover:bg-purple-700",
-              borderColor: "border-purple-200"
-            }
-          case "heroes":
-            return {
-              primaryColor: "text-red-600",
-              bgGradient: "from-red-50 to-orange-100",
-              accentColor: "bg-red-600",
-              buttonColor: "bg-red-600 hover:bg-red-700",
-              borderColor: "border-red-200"
-            }
-          case "royalty":
-            return {
-              primaryColor: "text-blue-700",
-              bgGradient: "from-blue-50 to-indigo-100",
-              accentColor: "bg-blue-600",
-              buttonColor: "bg-blue-600 hover:bg-blue-700",
-              borderColor: "border-blue-200"
-            }
-          default: // Default or space theme
-            return {
-              primaryColor: "text-indigo-700",
-              bgGradient: "from-indigo-50 to-white",
-              accentColor: "bg-indigo-600",
-              buttonColor: "bg-indigo-600 hover:bg-indigo-700",
-              borderColor: "border-indigo-200"
-            }
+  // Theme-based styling
+  const getThemeStyles = () => {
+    // ... (theme style definitions remain the same) ...
+    switch (learningTheme) {
+      case "magic":
+        return {
+          primaryColor: "text-purple-700",
+          bgGradient: "from-purple-50 to-indigo-100",
+          accentColor: "bg-purple-600",
+          buttonColor: "bg-purple-600 hover:bg-purple-700",
+          borderColor: "border-purple-200"
         }
-    };
-    const themeStyles = getThemeStyles();
+      case "heroes":
+        return {
+          primaryColor: "text-red-600",
+          bgGradient: "from-red-50 to-orange-100",
+          accentColor: "bg-red-600",
+          buttonColor: "bg-red-600 hover:bg-red-700",
+          borderColor: "border-red-200"
+        }
+      case "royalty":
+        return {
+          primaryColor: "text-blue-700",
+          bgGradient: "from-blue-50 to-indigo-100",
+          accentColor: "bg-blue-600",
+          buttonColor: "bg-blue-600 hover:bg-blue-700",
+          borderColor: "border-blue-200"
+        }
+      default: // Default or space theme
+        return {
+          primaryColor: "text-indigo-700",
+          bgGradient: "from-indigo-50 to-white",
+          accentColor: "bg-indigo-600",
+          buttonColor: "bg-indigo-600 hover:bg-indigo-700",
+          borderColor: "border-indigo-200"
+        }
+    }
+  };
+  const themeStyles = getThemeStyles();
 
   // Use the isLoading state from the context directly
   const isLoading = isTutorLoading;
 
-  // Determine if the Continue button should be shown
-  const showContinueButton = currentOutput && !isLoading && !errorState.isError && !currentOutput.evaluation && !currentOutput.prompt_for_answer;
-  // Determine if the Answer input section should be shown
-  const showAnswerInput = currentOutput && !isLoading && !errorState.isError && !currentOutput.evaluation && currentOutput.prompt_for_answer;
+  // UPDATED: Determine if the Continue button should be shown
+  // - Don't show continue when forceInputRequired is true (backend requires input)
+  // - Don't show continue when action_type is 'pause'
+  // - Don't show continue when prompt_for_answer is true
+  // - Don't show continue during loading or errors
+  const showContinueButton = currentOutput && 
+                            !isLoading && 
+                            !errorState.isError && 
+                            !currentOutput.evaluation && 
+                            !currentOutput.prompt_for_answer && 
+                            !forceInputRequired &&
+                            lastActionType !== "pause";
+                            
+  // UPDATED: Determine if the Answer input section should be shown
+  // Show input when:
+  // - prompt_for_answer is true OR forceInputRequired is true
+  // - not during evaluation
+  // - not during loading or errors
+  const showAnswerInput = currentOutput && 
+                         !isLoading && 
+                         !errorState.isError && 
+                         !currentOutput.evaluation && 
+                         (currentOutput.prompt_for_answer || forceInputRequired);
 
 
   return (
@@ -303,6 +337,15 @@ export default function LessonPage() {
             </span>
           </div>
         </div>
+
+        {/* Debug indicator - optional, helps during development */}
+        {process.env.NODE_ENV === 'development' && (
+          <div className="text-xs text-gray-500 mb-2">
+            Debug: {forceInputRequired ? "Input Required" : "No forced input"} | 
+            Action: {lastActionType || "none"} |
+            Prompt: {currentOutput?.prompt_for_answer ? "Yes" : "No"}
+          </div>
+        )}
 
         {/* Content Area */}
         <AnimatePresence mode="wait">
@@ -369,26 +412,25 @@ export default function LessonPage() {
                   <div className="text-base md:text-lg text-gray-800 mb-3 max-w-lg">
                     <ReactMarkdown>{currentOutput.text || ""}</ReactMarkdown>
                   </div>
-                  {/* Automatically proceed or wait? Current logic waits for next message */}
-                   {/* ADDED: A continue button even after evaluation might be needed if backend doesn't auto-proceed */}
-                   <div className="mt-6 flex justify-center">
-                       <Button
-                         size="lg"
-                         onClick={handleContinue} // Use continue here too
-                         className={`${themeStyles.buttonColor} text-white px-8 py-3 rounded-full text-lg shadow-lg transition-all duration-300 hover:scale-105 hover:shadow-xl border border-indigo-400/30`}
-                         disabled={isLoading}
-                       >
-                         {isLoading ? (
-                           <>
-                             <Loader2 className="h-4 w-4 animate-spin mr-2" /> Loading...
-                           </>
-                         ) : (
-                           <>
-                             Next Step <ArrowRightIcon className="ml-2 h-4 w-4" />
-                           </>
-                         )}
-                       </Button>
-                   </div>
+                  {/* Show Continue after evaluation */}
+                  <div className="mt-6 flex justify-center">
+                      <Button
+                        size="lg"
+                        onClick={handleContinue} // Use continue here too
+                        className={`${themeStyles.buttonColor} text-white px-8 py-3 rounded-full text-lg shadow-lg transition-all duration-300 hover:scale-105 hover:shadow-xl border border-indigo-400/30`}
+                        disabled={isLoading}
+                      >
+                        {isLoading ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin mr-2" /> Loading...
+                          </>
+                        ) : (
+                          <>
+                            Next Step <ArrowRightIcon className="ml-2 h-4 w-4" />
+                          </>
+                        )}
+                      </Button>
+                  </div>
                 </div>
               ) : (
                 // --- Standard Content View ---
@@ -475,7 +517,7 @@ export default function LessonPage() {
                     )}
 
                     {showContinueButton && (
-                        // --- ADDED: Continue Button Section ---
+                        // --- Continue Button Section ---
                         <div className="mt-6 flex justify-center">
                             <Button
                                 size="lg"

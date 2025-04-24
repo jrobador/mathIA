@@ -102,6 +102,7 @@ export interface AgentOutput {
   prompt_for_answer?: boolean;
   evaluation?: string | null;
   is_final_step?: boolean;
+  action_type?: string;
 }
 
 // Mensaje WebSocket

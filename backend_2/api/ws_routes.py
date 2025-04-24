@@ -151,10 +151,25 @@ async def websocket_session_endpoint(websocket: WebSocket, session_id: str):
                     await send_agent_responses(websocket, results, request_id)
 
                 elif action == "continue":
-                    # Agent processes the next step in the learning flow
-                    result: Dict[str, Any] = await learning_agent.process_step(session_id)
-                    # Send agent response back, including the original request ID
-                    await send_agent_responses(websocket, [result], request_id) # Send single result as list
+                    # Get the current state to check if it's waiting for input
+                    state_data = learning_agent.get_session_state(session_id)
+                    
+                    if state_data and state_data.get("waiting_for_input", False):
+                        # If waiting for input, send a message telling the frontend to show 
+                        # an input form instead of just pausing
+                        result = {
+                            "action": "require_input",
+                            "message": "Please provide an answer for this problem",
+                            "content_type": "input_required",
+                            "waiting_for_input": True,
+                            "state_metadata": state_data
+                        }
+                    else:
+                        # Normal case: not waiting for input, proceed with next step
+                        result = await learning_agent.process_step(session_id)
+                    
+                    # Send response back with the request ID
+                    await send_agent_responses(websocket, [result], request_id)
 
                 elif action == "get_state":
                     # Retrieve current session state from the agent

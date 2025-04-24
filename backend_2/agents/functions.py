@@ -231,11 +231,11 @@ async def present_guided_practice(state: StudentState) -> Dict[str, Any]:
         if os.path.exists(practice_template_path):
             practice_content = await invoke_with_prompty(
                 practice_template_path,
-                topic_title=topic.title,
-                topic_description=topic.description,
+                topic=topic.title,  # Changed from topic_title
+                topic_description=topic.description,  # Keep this if template uses it
                 cpa_phase=current_cpa_phase_value,
                 theme=state.personalized_theme,
-                mastery_level=mastery,
+                mastery=mastery,  # Changed from mastery_level
                 subtopics=", ".join(topic.subtopics)
             )
         else:
@@ -375,11 +375,11 @@ async def present_independent_practice(state: StudentState) -> Dict[str, Any]:
             # Usar plantilla Prompty para generar problema
             practice_content = await invoke_with_prompty(
                 practice_template_path,
-                topic_title=topic.title,
-                topic_description=topic.description,
+                topic=topic.title,  # Changed from topic_title
+                topic_description=topic.description,  # Keep this if template uses it
                 cpa_phase=current_cpa_phase_value,
                 theme=state.personalized_theme,
-                mastery_level=mastery,
+                mastery=mastery,  # Changed from mastery_level
                 subtopics=", ".join(topic.subtopics),
                 previous_context=previous_context  # Add previous context
             )
