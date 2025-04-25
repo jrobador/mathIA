@@ -297,25 +297,86 @@ async def generate_image(prompt: str) -> Optional[str]:
     Returns:
         URL de la imagen generada, o None si la generación falló
     """
-    # Para testing, generar siempre un nombre de archivo único basado en el prompt
-    # Esto evitará reutilización de URLs en diferentes contenidos
-    prompt_hash = hashlib.md5((prompt + str(uuid.uuid4())).encode()).hexdigest()[:10]
-    filename = f"mock_image_{prompt_hash}.png"
-    file_path = os.path.join(IMAGES_DIR, filename)
+    # Comprobar si DALL-E está disponible
+    if not DALLE_AVAILABLE:
+        # Generar una URL de imagen simulada para pruebas
+        filename = f"placeholder_{hashlib.md5(prompt.encode()).hexdigest()[:10]}.png"
+        file_path = os.path.join(IMAGES_DIR, filename)
+        
+        # Crear un archivo de imagen placeholder si no existe
+        if not os.path.exists(file_path):
+            # Crear un archivo vacío o una imagen básica
+            with open(file_path, 'wb') as f:
+                f.write(b'Placeholder image data')
+        
+        # Devolver URL relativa
+        relative_url = f"/static/images/{filename}"
+        return relative_url
     
-    # Crear un archivo de imagen placeholder si no existe
-    if not os.path.exists(file_path):
-        # Crear un archivo vacío o una imagen básica
-        with open(file_path, 'wb') as f:
-            f.write(b'Mock image data for testing')
+    # Importar aiohttp solo si se necesita
+    import aiohttp
     
-    # Imprimir información de depuración
-    print(f"MOCK: Generated new image with URL: /static/images/{filename}")
-    print(f"MOCK: Image prompt was: {prompt[:100]}...")
+    # Preparar la solicitud a la API
+    api_version = "2024-02-01"  # Versión de la API para DALL-E 3
+    url = f"{AZURE_DALLE_ENDPOINT}/openai/deployments/dall-e-3/images/generations?api-version={api_version}"
     
-    # Devolver URL relativa
-    relative_url = f"/static/images/{filename}"
-    return relative_url
+    headers = {
+        "Content-Type": "application/json",
+        "api-key": AZURE_DALLE_API_KEY
+    }
+    
+    # Preparar el payload de la solicitud
+    payload = {
+        "model": "dall-e-3",
+        "prompt": prompt,
+        "size": "1024x1024",  # Tamaño por defecto
+        "style": "vivid",     # Puede ser 'vivid' o 'natural'
+        "quality": "standard",  # Puede ser 'standard' o 'hd'
+        "n": 1                # Número de imágenes a generar
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    
+                    # Extraer la URL de la imagen o datos base64 de la respuesta
+                    if result.get('data') and len(result['data']) > 0:
+                        data_item = result['data'][0]
+                        
+                        image_url = data_item.get('url')
+                        if image_url:
+                            # Intentar descargar y guardar la imagen localmente
+                            image_filename = await download_and_save_image(image_url, prompt)
+                            if image_filename:
+                                # Devolver la URL local
+                                relative_url = f"/static/images/{image_filename}"
+                                return relative_url
+                            
+                            # Fallback a usar la URL original si la descarga falla
+                            return image_url
+                        else:
+                            # Manejar caso donde los datos de imagen están codificados en base64
+                            image_b64 = data_item.get('b64_json')
+                            if image_b64:
+                                # Guardar la imagen en un archivo
+                                image_path = save_base64_image(image_b64, prompt)
+                                if image_path:
+                                    # Convertir a una URL relativa al servidor API
+                                    relative_url = f"/static/images/{os.path.basename(image_path)}"
+                                    return relative_url
+                    
+                    # Si llegamos aquí, no pudimos encontrar los datos de la imagen
+                    print(f"Error: No se encontró URL de imagen o datos base64 en la respuesta. Respuesta completa: {json.dumps(result)}")
+                    return None
+                else:
+                    error_text = await response.text()
+                    print(f"Error generando imagen. Estado: {response.status}. Respuesta: {error_text}")
+                    return None
+    except Exception as e:
+        print(f"Excepción durante la generación de imagen: {str(e)}")
+        return None
 
 async def download_and_save_image(image_url: str, prompt: str) -> Optional[str]:
     """
@@ -398,75 +459,107 @@ def save_base64_image(b64_data: str, prompt: str) -> Optional[str]:
 
 # ---- AZURE SPEECH SERVICE ----
 
-# Constantes para Speech
+# Constants for Speech
 AUDIO_FORMAT = "audio-16khz-128kbitrate-mono-mp3"
 VOICE_NAME = "en-US-SaraNeural"
 
 async def generate_speech(text: str, voice_name: str = VOICE_NAME, style: str = None, style_degree: int = 1) -> Optional[str]:
     """
-    Genera audio de voz a partir de texto usando Azure Speech Service.
+    Generates voice audio from text using Azure Speech Service.
 
     Args:
-        text: Contenido de texto a convertir a voz
-        voice_name: Voz a usar para la síntesis (por defecto voz de Sara)
-        style: Estilo de voz a aplicar (ej. "cheerful", "sad", "angry", etc.)
-        style_degree: Intensidad del estilo (1-2)
+        text: Text content to convert to speech
+        voice_name: Voice to use for synthesis (default is Sara voice)
+        style: Voice style to apply such as cheerful, sad, angry
+        style_degree: Style intensity (1-2)
 
     Returns:
-        URL al archivo de audio generado, o None si la generación falló
+        URL to the generated audio file, or None if generation failed
     """
     if not text:
         return None
 
-    # Limpiar texto si es necesario
-    text = text.replace("**Problem Statement:**", "")
-
-    # Volver a comprobar si el texto quedó vacío después de la eliminación
-    if not text.strip():
+    # Clean text by removing markdown formatting
+    cleaned_text = text
+    
+    # Remove Problem Statement formatting
+    cleaned_text = cleaned_text.replace("Problem Statement:", "")
+    
+    # Remove all asterisks (markdown formatting)
+    cleaned_text = re.sub(r'\*+', '', cleaned_text)
+    
+    # Remove all numbering symbols
+    cleaned_text = re.sub(r'#', '', cleaned_text)
+    
+    # Remove explanatory parentheticals like (e.g., example)
+    cleaned_text = re.sub(r'\(e\.g\.[^)]*\)', '', cleaned_text)
+    
+    # Check if text is empty after cleaning
+    if not cleaned_text.strip():
         return None
 
-    # Recortar texto si es demasiado largo
-    if len(text) > 5000:
-        text = text[:4997] + "..."
+    # Truncate text if too long
+    if len(cleaned_text) > 5000:
+        cleaned_text = cleaned_text[:4997] + "..."
 
-    # Para testing, generar siempre un nombre de archivo único
-    speech_hash = hashlib.md5((text[:100] + str(uuid.uuid4())).encode()).hexdigest()[:10]
-    filename = f"mock_speech_{speech_hash}.mp3"
+    # Check if Speech is available
+    if not SPEECH_AVAILABLE:
+        # Generate a simulated audio URL for testing
+        filename = f"speech_{hashlib.md5(cleaned_text.encode()).hexdigest()[:10]}.mp3"
+        file_path = os.path.join(AUDIO_DIR, filename)
+        
+        # Create a placeholder audio file if it doesn't exist
+        if not os.path.exists(file_path):
+            with open(file_path, 'wb') as f:
+                f.write(b'Placeholder audio data')
+        
+        # Return relative URL
+        relative_url = f"/static/audio/{filename}"
+        return relative_url
+
+    # Generate a unique filename for this audio
+    filename = f"speech_{uuid.uuid4().hex}.mp3"
     file_path = os.path.join(AUDIO_DIR, filename)
-    
-    # Crear un archivo de audio placeholder si no existe
-    if not os.path.exists(file_path):
-        # Crear un archivo vacío o un archivo de audio básico
-        with open(file_path, 'wb') as f:
-            f.write(b'Mock audio data for testing')
-    
-    # Imprimir información de depuración
-    style_info = f" (Style: {style})" if style else ""
-    print(f"MOCK: Generated new audio with URL: /static/audio/{filename}{style_info}")
-    print(f"MOCK: Text beginning: {text[:50]}...")
-    
-    # Devolver URL relativa
-    relative_url = f"/static/audio/{filename}"
-    return relative_url
 
-# Modificar synthesize_speech para pasar el estilo al SSML
+    try:
+        audio_result = await asyncio.to_thread(
+            synthesize_speech,
+            cleaned_text,  # Pass the thoroughly cleaned text
+            file_path,
+            voice_name,
+            AZURE_SPEECH_SUBSCRIPTION_KEY,
+            AZURE_SPEECH_REGION,
+            style=style,
+            style_degree=style_degree
+        )
+
+        if audio_result:
+            # Build relative URL
+            relative_url = f"/static/audio/{filename}"
+            return relative_url
+        else:
+            return None
+    except Exception as e:
+        print(f"Error generating audio: {e}")
+        return None
+
 def synthesize_speech(text: str, output_path: str, voice_name: str,
                      speech_key: str, service_region: str, 
                      style: str = None, style_degree: int = 1) -> bool:
     """
-    Realiza la síntesis de voz usando Azure Speech SDK.
+    Performs speech synthesis using Azure Speech SDK.
 
     Args:
-        text: Texto a sintetizar (ya limpio)
-        output_path: Donde guardar el archivo de audio
-        voice_name: Voz a usar
-        speech_key: Clave de suscripción de Azure Speech
-        service_region: Región del servicio Azure Speech
-        style: Estilo de voz a aplicar (ej. "cheerful", "sad", "angry", etc.)
-        style_degree: Intensidad del estilo (1-2)
+        text: Text to synthesize (already cleaned)
+        output_path: Where to save the audio file
+        voice_name: Voice to use
+        speech_key: Azure Speech subscription key
+        service_region: Azure Speech service region
+        style: Voice style to apply (e.g., "cheerful", "sad", "friendly")
+        style_degree: Style intensity (1-2)
 
     Returns:
-        True si la síntesis fue exitosa, False en caso contrario
+        True if synthesis was successful, False otherwise
     """
     import azure.cognitiveservices.speech as speechsdk
     
@@ -476,100 +569,104 @@ def synthesize_speech(text: str, output_path: str, voice_name: str,
         speechsdk.SpeechSynthesisOutputFormat.Audio16Khz128KBitRateMonoMp3
     )
 
-    # Crear salida de archivo de audio para la voz sintetizada
+    # Create audio output for the synthesized voice
     audio_config = speechsdk.audio.AudioOutputConfig(filename=output_path)
 
-    # Crear un sintetizador de voz
+    # Create a speech synthesizer
     speech_synthesizer = speechsdk.SpeechSynthesizer(
         speech_config=speech_config,
         audio_config=audio_config
     )
 
-    # Siempre usar SSML cuando se especifica un estilo
+    # Always use SSML when a style is specified or if the text requires it
     use_ssml = style is not None or should_use_ssml(text)
 
-    # Iniciar síntesis
+    # Start synthesis
     if use_ssml:
-        # Envolver el texto en SSML para mejor control sobre la síntesis de voz
+        # Wrap the text in SSML for better control over speech synthesis
         ssml = create_ssml(text, voice_name, style, style_degree)
         result = speech_synthesizer.speak_ssml_async(ssml).get()
     else:
-        # Usar síntesis de texto plano para contenido simple
+        # Use plain text synthesis for simple content
         result = speech_synthesizer.speak_text_async(text).get()
 
-    # Comprobar el resultado
+    # Check result
     if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+        print(f"Speech synthesized successfully and saved to {output_path}")
         return True
     elif result.reason == speechsdk.ResultReason.Canceled:
         cancellation_details = result.cancellation_details
+        print(f"Speech synthesis canceled: {cancellation_details.reason}")
         if cancellation_details.reason == speechsdk.CancellationReason.Error:
-            print(f"Detalles del error: {cancellation_details.error_details}")
+            print(f"Error details: {cancellation_details.error_details}")
         return False
     else:
+        print(f"Speech synthesis result: {result.reason}")
         return False
 
 def should_use_ssml(text: str) -> bool:
     """
-    Determina si deberíamos usar SSML basado en el contenido del texto.
+    Determines if we should use SSML based on the text content.
 
     Args:
-        text: Texto a analizar (ya limpio)
+        text: Text to analyze (already cleaned)
 
     Returns:
-        True si SSML sería beneficioso, False en caso contrario
+        True if SSML would be beneficial, False otherwise
     """
-    # Comprobar si el texto contiene términos matemáticos, números o caracteres especiales
-    # que podrían beneficiarse de SSML
-    math_terms = ["fracción", "ecuación", "suma", "diferencia", "producto", "cociente",
-                  "numerador", "denominador", "igual", "×", "÷", "+", "-", "="]
+    # Check if the text contains mathematical terms, numbers or special characters
+    # that could benefit from SSML
+    math_terms = ["fraction", "equation", "sum", "difference", "product", "quotient",
+                  "numerator", "denominator", "equals", "×", "÷", "+", "-", "="]
 
-    # Comprobar números seguidos de operadores matemáticos
+    # Check for numbers followed by mathematical operators
     has_math_expressions = any(term in text.lower() for term in math_terms)
 
-    # Comprobar si el texto es lo suficientemente largo para beneficiarse del control de prosodia
+    # Check if the text is long enough to benefit from prosody control
     is_long_text = len(text) > 200
 
     result = has_math_expressions or is_long_text
     return result
 
-def create_ssml(text: str, voice_name: str, style: str = "calm", style_degree: int = 1) -> str:
+def create_ssml(text: str, voice_name: str, style: str = 'calm', style_degree: int = 1) -> str:
     """
-    Crea marcado SSML para el texto proporcionado, con soporte para estilos de voz.
+    Creates SSML markup for the provided text, with support for voice styles.
 
     Args:
-        text: Texto a envolver en SSML (ya limpio)
-        voice_name: Voz a usar
-        style: Estilo de voz a aplicar (ej. "cheerful", "sad", "angry", etc.)
-        style_degree: Intensidad del estilo (1-2)
+        text: Text to wrap in SSML (already cleaned)
+        voice_name: Voice to use
+        style: Voice style to apply (e.g., "cheerful", "sad", "friendly")
+        style_degree: Style intensity (1-2)
 
     Returns:
-        Cadena SSML formateada correctamente
+        Properly formatted SSML string
     """
-    # Escapar caracteres especiales XML en el texto
+    # Escape special XML characters in the text
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "&apos;")
 
+    # Handle special characters for better pronunciation
     text = text.replace("×", '<say-as interpret-as="characters">×</say-as>')
     text = text.replace("÷", '<say-as interpret-as="characters">÷</say-as>')
 
-    # Reemplazar números y fracciones con SSML apropiado
-    # Manejar fracciones como 1/2, 3/4, etc.
+    # Replace numbers and fractions with appropriate SSML
+    # Handle fractions like 1/2, 3/4, etc.
     fraction_pattern = r"(\d+)/(\d+)"
     text = re.sub(fraction_pattern, r'<say-as interpret-as="fraction">\1/\2</say-as>', text)
 
-    # Manejar números decimales
+    # Handle decimal numbers
     decimal_pattern = r"(\d+\.\d+)"
     text = re.sub(decimal_pattern, r'<say-as interpret-as="cardinal">\1</say-as>', text)
 
-    # Crear el documento SSML completo
+    # Determine language based on voice name
     lang = "en-US"
     
-    # Construir el SSML, incluyendo el namespace mstts si se proporciona un estilo
+    # Build the SSML, including mstts namespace if a style is provided
     if style:
         ssml = f"""
         <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="{lang}">
             <voice name="{voice_name}">
                 <mstts:express-as style="{style.lower()}" styledegree="{style_degree}">
-                    <prosody rate="0.95" pitch="+0%">
+                    <prosody rate="0.9" pitch="+0%">
                         {text}
                     </prosody>
                 </mstts:express-as>
@@ -580,7 +677,7 @@ def create_ssml(text: str, voice_name: str, style: str = "calm", style_degree: i
         ssml = f"""
         <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{lang}">
             <voice name="{voice_name}">
-                <prosody rate="1.05" pitch="+0%">
+                <prosody rate="0.9" pitch="+0%">
                     {text}
                 </prosody>
             </voice>
