@@ -133,6 +133,10 @@ Built with Next.js (App Router) and TypeScript, using Tailwind CSS and `shadcn/u
 
 This diagram illustrates the flow of `LangGraphAdaptiveLearningAgent`. It uses the core functions from `agents/functions.py` as nodes within the graph.
 
+**(Static Image Version)**
+![Agent Flow Diagram](graphic.png)
+
+**(Mermaid Code for Dynamic Rendering)**
 ```mermaid
 ---
 config:
