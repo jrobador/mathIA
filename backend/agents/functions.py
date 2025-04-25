@@ -316,8 +316,8 @@ async def present_guided_practice(state: StudentState) -> Dict[str, Any]:
             "solution": solution_text,
             "type": "guided_practice",
             "difficulty": 0.3,
-            "mastery_value": 0.1,
-            "mastery_penalty": 0.05
+            "mastery_value": 0.2,
+            "mastery_penalty": 0.1
         }
 
         state.last_action_type = "present_guided_practice"
@@ -463,8 +463,8 @@ async def present_independent_practice(state: StudentState) -> Dict[str, Any]:
             "solution": solution_text, 
             "type": "independent_practice",
             "difficulty": min(0.9, mastery + 0.25), 
-            "mastery_value": 0.15,
-            "mastery_penalty": 0.08
+            "mastery_value": 0.3,
+            "mastery_penalty": 0.15
         }
 
         state.last_action_type = "present_independent_practice"
