@@ -35,7 +35,7 @@ class MathTutorClient {
   private processingRequest: boolean; // Simple lock to prevent concurrent sends
   private reconnectTimer: ReturnType<typeof setTimeout> | null;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
-  private heartbeatTimeout = 30000; // 30 seconds
+  private heartbeatTimeout = 3000000;
 
   /**
    * Initialize the API client with optional configuration
@@ -168,7 +168,7 @@ class MathTutorClient {
                 .then(resolve)
                 .catch(reject); // This uses reject, so no warning
         }
-      }, 10000); // 10 second timeout for initial connection
+      }, 1000000); // 10 second timeout for initial connection
   
       ws.onopen = () => {
         clearTimeout(connectionTimeout); // Clear timeout on successful open
@@ -405,7 +405,7 @@ class MathTutorClient {
             this.processingRequest = false; // Unlock on timeout
             reject(new Error("Tiempo de espera agotado para procesar la entrada."));
           }
-        }, 60000);
+        }, 6000000);
   
         this.messageCallbacks.set(requestId, (response) => {
           console.log(`Received WS response for request ${requestId}:`, response);
@@ -573,7 +573,7 @@ class MathTutorClient {
                     console.error(`Timeout waiting for status response ${requestId}`);
                     reject(new Error("Tiempo de espera agotado para obtener estado de sesión."));
                 }
-            }, 10000); // 10 seconds timeout
+            }, 1000000);
 
             this.messageCallbacks.set(requestId, (response) => {
                 clearTimeout(timeoutHandle);
