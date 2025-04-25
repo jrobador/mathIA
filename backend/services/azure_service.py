@@ -1,11 +1,10 @@
 """
-Implementación completa de integración con servicios Azure:
-- Azure OpenAI para LLM
-- Azure DALL-E para generación de imágenes
-- Azure Speech Service para texto a voz
+Complete integration implementation with Azure services:
+- Azure OpenAI for LLM
+- Azure DALL-E for imaging
+- Azure Speech Service for text-to-speech
 
-Este archivo centraliza todas las funciones de acceso a servicios Azure
-y gestiona adecuadamente las credenciales.
+This file centralizes all Azure service access functions and properly manages credentials.
 """
 
 import os
@@ -24,23 +23,20 @@ from config import (
     OPENAI_AVAILABLE, DALLE_AVAILABLE, SPEECH_AVAILABLE
 )
 
-# Directorios para archivos estáticos
 IMAGES_DIR = "static/images"
 AUDIO_DIR = "static/audio"
 
-# Asegurar que los directorios existen
 os.makedirs(IMAGES_DIR, exist_ok=True)
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
 # ---- AZURE OPENAI SERVICE ----
 
-# Cliente global para OpenAI
 _openai_client = None
 
 async def get_openai_client():
     """
-    Obtiene o inicializa el cliente de Azure OpenAI.
-    Usa una variable global para evitar crear múltiples clientes.
+    Gets or initializes the Azure OpenAI client.
+    Uses a global variable to avoid creating multiple clients.
     """
     global _openai_client
     
@@ -48,11 +44,11 @@ async def get_openai_client():
         return _openai_client
     
     if not OPENAI_AVAILABLE:
-        print("ADVERTENCIA: Azure OpenAI no está configurado correctamente. Las llamadas al LLM fallarán.")
+        print("WARNING: Azure OpenAI is not properly configured. LLM calls will fail.")
         return None
         
     try:
-        # Importar aquí para evitar cargar estos módulos si no son necesarios
+        # Import here to avoid loading these modules if not needed
         from openai import AsyncAzureOpenAI
         
         _openai_client = AsyncAzureOpenAI(
@@ -61,23 +57,23 @@ async def get_openai_client():
             api_key=AZURE_OPENAI_API_KEY,
         )
         
-        print(f"Cliente de Azure OpenAI inicializado correctamente: {AZURE_OPENAI_ENDPOINT}")
+        print(f"Azure OpenAI client successfully initialized: {AZURE_OPENAI_ENDPOINT}")
         return _openai_client
         
     except Exception as e:
-        print(f"Error inicializando cliente de Azure OpenAI: {e}")
+        print(f"Error initializing Azure OpenAI client: {e}")
         return None
 
 class PromptyTemplate:
     """
-    Gestor de plantillas de prompt en formato Prompty.
+    Manager for Prompty format templates.
     """
     def __init__(self, template_path: str):
         """
-        Inicializa una plantilla Prompty desde un archivo.
+        Initializes a Prompty template from a file.
         
         Args:
-            template_path: Ruta al archivo de plantilla Prompty
+            template_path: Path to the Prompty template file
         """
         self.template_path = template_path
         self.name = None
@@ -86,41 +82,41 @@ class PromptyTemplate:
         self.inputs = {}
         self.messages = []
         
-        # Cargar y analizar la plantilla
+        # Load and parse the template
         self.load_template()
     
     def load_template(self):
         """
-        Carga y analiza el archivo de plantilla Prompty.
+        Loads and parses the Prompty template file.
         """
         try:
             with open(self.template_path, 'r', encoding='utf-8') as f:
                 template_content = f.read()
             
-            # Dividir en frontmatter y mensajes
+            # Split into frontmatter and messages
             parts = template_content.split('---')
             if len(parts) < 3:
-                raise ValueError(f"Formato de plantilla Prompty inválido en {self.template_path}")
+                raise ValueError(f"Invalid Prompty template format in {self.template_path}")
             
-            # Analizar frontmatter YAML
+            # Parse frontmatter YAML
             frontmatter = yaml.safe_load(parts[1])
             
-            # Extraer metadatos
+            # Extract metadata
             self.name = frontmatter.get('name')
             self.description = frontmatter.get('description')
             self.model_config = frontmatter.get('model', {})
             self.inputs = frontmatter.get('inputs', {})
             
-            # Analizar plantillas de mensajes
+            # Parse message templates
             messages_section = parts[2].strip()
             
-            # Dividir en secciones de roles
+            # Split into role sections
             current_role = None
             current_content = []
             
             for line in messages_section.split('\n'):
                 if line.strip() in ['system:', 'user:', 'assistant:']:
-                    # Guardar sección anterior si existe
+                    # Save the previous section if it exists
                     if current_role is not None:
                         self.messages.append({
                             'role': current_role,
@@ -128,12 +124,12 @@ class PromptyTemplate:
                         })
                         current_content = []
                     
-                    # Iniciar nueva sección
-                    current_role = line.strip()[:-1]  # Eliminar los dos puntos
+                    # Start a new section
+                    current_role = line.strip()[:-1]  # Remove the colon
                 else:
                     current_content.append(line)
             
-            # Añadir la última sección
+            # Add the last section
             if current_role is not None:
                 self.messages.append({
                     'role': current_role,
@@ -141,25 +137,25 @@ class PromptyTemplate:
                 })
                 
         except Exception as e:
-            print(f"Error cargando plantilla Prompty {self.template_path}: {e}")
+            print(f"Error loading Prompty template {self.template_path}: {e}")
             raise
     
     def fill_template(self, **kwargs):
         """
-        Rellena la plantilla con las variables proporcionadas.
+        Fills the template with the provided variables.
         
         Args:
-            **kwargs: Valores para las variables de plantilla
+            **kwargs: Values for the template variables
             
         Returns:
-            Lista de diccionarios de mensajes rellenos
+            List of dictionaries with filled messages
         """
         filled_messages = []
         
         for msg in self.messages:
             content = msg['content']
             
-            # Reemplazar variables
+            # Replace variables
             for key, value in kwargs.items():
                 placeholder = f"{{{{{key}}}}}"
                 content = content.replace(placeholder, str(value))
@@ -173,14 +169,14 @@ class PromptyTemplate:
 
 async def invoke_with_prompty(template_path: str, **kwargs) -> str:
     """
-    Invoca el LLM de Azure OpenAI usando una plantilla Prompty.
-    
+    Invokes the Azure OpenAI LLM using a Prompty template.
+
     Args:
-        template_path: Ruta al archivo de plantilla Prompty
-        **kwargs: Valores para las variables de plantilla
-        
+    template_path: Path to the Prompty template file
+    **kwargs: Values for template variables
+
     Returns:
-        Texto de respuesta del modelo
+    Model response text
     """
     # Debug: Print path information to help with troubleshooting
     print(f"Loading Prompty template from: {template_path}")
@@ -199,22 +195,22 @@ async def invoke_with_prompty(template_path: str, **kwargs) -> str:
             print(f"Could not find template at: {alt_path}")
             return f"Error: Template not found at {template_path} or {alt_path}"
     
-    # Comprobar si OpenAI está disponible
+    # Check if OpenAI is available
     if not OPENAI_AVAILABLE:
-        return f"[SIMULACIÓN] Respuesta para plantilla {template_path} con variables {kwargs}"
+        return f"[SIMULATION] Response for template {template_path} with variables {kwargs}"
     
-    # Asegurar que el cliente está inicializado
+    # Ensure the client is initialized
     client = await get_openai_client()
     
     if not client:
-        raise Exception("Cliente LLM no disponible. Comprueba la configuración de Azure OpenAI.")
+        raise Exception("LLM client is not available. Check Azure OpenAI configuration.")
     
     try:
-        # Cargar y rellenar la plantilla
+        # Load and fill the template
         template = PromptyTemplate(template_path)
         messages = template.fill_template(**kwargs)
         
-        # Hacer la llamada a la API
+        # Make the API call
         response = await client.chat.completions.create(
             model=AZURE_OPENAI_CHAT_DEPLOYMENT,
             messages=messages,
@@ -224,237 +220,354 @@ async def invoke_with_prompty(template_path: str, **kwargs) -> str:
         return response.choices[0].message.content
         
     except Exception as e:
-        print(f"Error usando plantilla Prompty {template_path}: {e}")
-        # Proporcionar una respuesta de fallback en caso de error
-        return f"No se pudo generar contenido: {str(e)}"
+        print(f"Error using Prompty template {template_path}: {e}")
+        # Provide a fallback response in case of error
+        return f"Could not generate content: {str(e)}"
     
+    
+import os
+import json
+import hashlib
+from typing import Optional, Dict, Any
+
+# Assume these are set elsewhere, e.g., from environment variables or a config file
+OPENAI_AVAILABLE = os.getenv("AZURE_OPENAI_API_KEY") is not None
+DALLE_AVAILABLE = os.getenv("AZURE_DALLE_API_KEY") is not None
+AZURE_OPENAI_CHAT_DEPLOYMENT = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4") # Example deployment name
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01") # Example API version
+
+AZURE_DALLE_ENDPOINT = os.getenv("AZURE_DALLE_ENDPOINT")
+AZURE_DALLE_API_KEY = os.getenv("AZURE_DALLE_API_KEY")
+
+# Directory to save images (ensure it exists)
+IMAGES_DIR = os.path.join("static", "images")
+if not os.path.exists(IMAGES_DIR):
+    os.makedirs(IMAGES_DIR)
+
+_openai_client = None
+
+async def get_openai_client():
+    """Initializes and returns the async OpenAI client."""
+    global _openai_client
+    if _openai_client is None and OPENAI_AVAILABLE:
+        try:
+            # Lazy import openai only if needed and available
+            from openai import AsyncAzureOpenAI
+            _openai_client = AsyncAzureOpenAI(
+                azure_endpoint=AZURE_OPENAI_ENDPOINT,
+                api_key=AZURE_OPENAI_API_KEY,
+                api_version=AZURE_OPENAI_API_VERSION,
+            )
+        except ImportError:
+            print("OpenAI library not installed. Please install with: pip install openai")
+            global OPENAI_AVAILABLE
+            OPENAI_AVAILABLE = False # Mark as unavailable if import fails
+        except Exception as e:
+            print(f"Error initializing Azure OpenAI client: {e}")
+            OPENAI_AVAILABLE = False # Mark as unavailable on init error
+    return _openai_client
+
+
 async def invoke_llm(prompt: str, system_message: Optional[str] = None, temperature: float = 0.2) -> str:
     """
-    Invoca el LLM de Azure OpenAI con un prompt simple.
-    
+    Invokes the Azure OpenAI LLM with a simple prompt.
+
     Args:
-        prompt: Texto a enviar al LLM
-        system_message: Mensaje de sistema opcional
-        temperature: Temperatura para la generación (0.0-1.0)
-        
+        prompt: Text to send to the LLM
+        system_message: Optional system message
+        temperature: Temperature for generation (0.0-1.0)
+
     Returns:
-        Texto de respuesta del modelo
+        Response text from the model
     """
-    # Comprobar si OpenAI está disponible
+    # Check if OpenAI is available
     if not OPENAI_AVAILABLE:
-        # Simulación si Azure OpenAI no está disponible
+        # Simulation if Azure OpenAI is not available
         if "theory" in prompt.lower():
-            return f"Aquí está la teoría sobre {prompt.split()[-1]}. Este es un concepto fundamental en matemáticas..."
+            return f"Here is the theory about {prompt.split()[-1]}. This is a fundamental concept in mathematics..."
         elif "problem" in prompt.lower():
-            return "Si tienes 3 manzanas y obtienes 2 más, ¿cuántas manzanas tienes en total?"
+            return "If you have 3 apples and get 2 more, how many apples do you have in total?"
         elif "evaluate" in prompt.lower():
-            # Simular evaluación básica
-            if "5" in prompt or "correcto" in prompt.lower():
+            # Simulate basic evaluation
+            if "5" in prompt or "correct" in prompt.lower():
                 return "CORRECT"
             else:
                 return "INCORRECT_CONCEPTUAL"
         else:
-            return "Respuesta generada para: " + prompt[:50] + "..."
-    
-    # Asegurar que el cliente está inicializado
+            return "Generated response for: " + prompt[:50] + "..."
+
+    # Ensure the client is initialized
     client = await get_openai_client()
-    
+
     if not client:
-        raise Exception("Cliente LLM no disponible. Comprueba la configuración de Azure OpenAI.")
-    
+        raise Exception("LLM client not available. Check Azure OpenAI configuration.")
+
     try:
-        # Preparar mensajes
+        # Prepare messages
         messages = []
-        
+
         if system_message:
             messages.append({"role": "system", "content": system_message})
-            
+
         messages.append({"role": "user", "content": prompt})
-        
-        # Hacer la llamada a la API
+
+        # Make the API call
         response = await client.chat.completions.create(
             model=AZURE_OPENAI_CHAT_DEPLOYMENT,
             messages=messages,
             temperature=temperature,
         )
-        
-        return response.choices[0].message.content
-        
+
+        # Check if response and choices are valid
+        if response.choices and response.choices[0].message and response.choices[0].message.content:
+             return response.choices[0].message.content
+        else:
+             # Handle cases where the response structure is unexpected
+             print(f"Unexpected LLM response structure: {response}")
+             return "Error: Received an unexpected response format from the LLM."
+
+
     except Exception as e:
-        print(f"Error invocando LLM: {e}")
-        # Proporcionar una respuesta de fallback en caso de error
-        return f"No se pudo generar contenido: {str(e)}"
+        print(f"Error invoking LLM: {e}")
+        # Provide a fallback response in case of error
+        return f"Could not generate content: {str(e)}"
 
 # ---- AZURE DALL-E SERVICE ----
 
 async def generate_image(prompt: str) -> Optional[str]:
     """
-    Genera una imagen usando la API Azure DALL-E 3 basada en el prompt proporcionado.
-    
+    Generates an image using the Azure DALL-E 3 API based on the provided prompt.
+
     Args:
-        prompt: Texto que describe la imagen a generar
-        
+        prompt: Text describing the image to generate
+
     Returns:
-        URL de la imagen generada, o None si la generación falló
+        URL of the generated image, or None if generation failed
     """
-    # Comprobar si DALL-E está disponible
+    # Check if DALL-E is available
     if not DALLE_AVAILABLE:
-        # Generar una URL de imagen simulada para pruebas
+        # Generate a simulated image URL for testing
         filename = f"placeholder_{hashlib.md5(prompt.encode()).hexdigest()[:10]}.png"
         file_path = os.path.join(IMAGES_DIR, filename)
-        
-        # Crear un archivo de imagen placeholder si no existe
+
+        # Create a placeholder image file if it doesn't exist
         if not os.path.exists(file_path):
-            # Crear un archivo vacío o una imagen básica
-            with open(file_path, 'wb') as f:
-                f.write(b'Placeholder image data')
-        
-        # Devolver URL relativa
-        relative_url = f"/static/images/{filename}"
+            # Create an empty file or basic image data
+            try:
+                from PIL import Image, ImageDraw, ImageFont
+                img = Image.new('RGB', (200, 100), color = (73, 109, 137))
+                d = ImageDraw.Draw(img)
+                try:
+                    d.text((10,10), "Placeholder", fill=(255,255,0)) 
+                except IOError:
+                     d.text((10,10), "Placeholder", fill=(255,255,0)) 
+                img.save(file_path)
+            except ImportError:
+                 # Fallback if Pillow is not installed
+                 with open(file_path, 'wb') as f:
+                     f.write(b'Placeholder image data') # Very basic fallback
+            except Exception as e:
+                 print(f"Error creating placeholder image: {e}")
+                 # Even more basic fallback: create empty file
+                 with open(file_path, 'wb') as f:
+                     f.write(b'')
+
+
+        # Return relative URL
+        relative_url = f"/static/images/{filename}" 
         return relative_url
-    
-    # Importar aiohttp solo si se necesita
-    import aiohttp
-    
-    # Preparar la solicitud a la API
-    api_version = "2024-02-01"  # Versión de la API para DALL-E 3
+
+    # Import aiohttp only if needed
+    try:
+        import aiohttp
+    except ImportError:
+        print("aiohttp library not installed. Please install with: pip install aiohttp")
+        return None # Cannot make request without aiohttp
+
+    # Prepare the API request
+    api_version = "2024-02-01"  # API version for DALL-E 3 (check Azure docs for latest)
+    # Correct endpoint construction for image generation
+    # Note: Deployment name ('dall-e-3' in this case) should match your Azure deployment
     url = f"{AZURE_DALLE_ENDPOINT}/openai/deployments/dall-e-3/images/generations?api-version={api_version}"
-    
+
+
     headers = {
         "Content-Type": "application/json",
         "api-key": AZURE_DALLE_API_KEY
     }
-    
-    # Preparar el payload de la solicitud
+
+    # Prepare the request payload
     payload = {
-        "model": "dall-e-3",
+        "model": "dall-e-3",  # Model specified in payload might be redundant if using deployment name in URL, but often included
         "prompt": prompt,
-        "size": "1024x1024",  # Tamaño por defecto
-        "style": "vivid",     # Puede ser 'vivid' o 'natural'
-        "quality": "standard",  # Puede ser 'standard' o 'hd'
-        "n": 1                # Número de imágenes a generar
+        "size": "1024x1024",  # Default size
+        "style": "vivid",     # Can be 'vivid' or 'natural'
+        "quality": "standard",  # Can be 'standard' or 'hd'
+        "n": 1                # Number of images to generate
     }
-    
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json=payload) as response:
                 if response.status == 200:
                     result = await response.json()
-                    
-                    # Extraer la URL de la imagen o datos base64 de la respuesta
+
+                    # Extract the image URL or base64 data from the response
                     if result.get('data') and len(result['data']) > 0:
                         data_item = result['data'][0]
-                        
+
                         image_url = data_item.get('url')
                         if image_url:
-                            # Intentar descargar y guardar la imagen localmente
+                            # Try to download and save the image locally
                             image_filename = await download_and_save_image(image_url, prompt)
                             if image_filename:
-                                # Devolver la URL local
-                                relative_url = f"/static/images/{image_filename}"
+                                # Return the local URL (relative path)
+                                relative_url = f"/static/images/{image_filename}" # Match placeholder logic
                                 return relative_url
-                            
-                            # Fallback a usar la URL original si la descarga falla
-                            return image_url
+
+                            # Fallback to using the original URL if download fails
+                            print(f"Warning: Failed to download image from {image_url}. Returning original URL.")
+                            return image_url # Return the Azure URL as a fallback
                         else:
-                            # Manejar caso donde los datos de imagen están codificados en base64
+                            # Handle case where image data is base64 encoded
                             image_b64 = data_item.get('b64_json')
                             if image_b64:
-                                # Guardar la imagen en un archivo
+                                # Save the image to a file
                                 image_path = save_base64_image(image_b64, prompt)
                                 if image_path:
-                                    # Convertir a una URL relativa al servidor API
-                                    relative_url = f"/static/images/{os.path.basename(image_path)}"
+                                    # Convert to a URL relative to the API server (adjust based on server setup)
+                                    relative_url = f"/static/images/{os.path.basename(image_path)}" # Match placeholder logic
                                     return relative_url
-                    
-                    # Si llegamos aquí, no pudimos encontrar los datos de la imagen
-                    print(f"Error: No se encontró URL de imagen o datos base64 en la respuesta. Respuesta completa: {json.dumps(result)}")
+
+                    # If we get here, we couldn't find the image data
+                    print(f"Error: Image URL or base64 data not found in the response. Full response: {json.dumps(result)}")
                     return None
                 else:
                     error_text = await response.text()
-                    print(f"Error generando imagen. Estado: {response.status}. Respuesta: {error_text}")
+                    print(f"Error generating image. Status: {response.status}. Response: {error_text}")
+                    # Attempt to parse error for more details
+                    try:
+                        error_json = json.loads(error_text)
+                        print(f"Parsed error details: {error_json}")
+                    except json.JSONDecodeError:
+                         pass # Keep the raw text if not JSON
                     return None
+    except aiohttp.ClientConnectorError as e:
+         print(f"Connection Error during image generation: {str(e)}. Check endpoint: {AZURE_DALLE_ENDPOINT}")
+         return None
     except Exception as e:
-        print(f"Excepción durante la generación de imagen: {str(e)}")
+        print(f"Exception during image generation: {str(e)}")
+        import traceback
+        traceback.print_exc() # Print full traceback for debugging
         return None
 
 async def download_and_save_image(image_url: str, prompt: str) -> Optional[str]:
     """
-    Descarga una imagen desde una URL y la guarda localmente.
-    
+    Downloads an image from a URL and saves it locally.
+
     Args:
-        image_url: URL de la imagen a descargar
-        prompt: Prompt usado para generar la imagen (usado para el nombre del archivo)
-        
+        image_url: URL of the image to download
+        prompt: Prompt used to generate the image (used for the filename)
+
     Returns:
-        Nombre del archivo de la imagen guardada, o None si la descarga falló
+        Filename of the saved image, or None if download failed
     """
-    import aiohttp
-    
     try:
-        # Crear un nombre de archivo único basado en un hash del prompt
+        import aiohttp
+    except ImportError:
+        print("aiohttp library not installed. Cannot download image.")
+        return None
+
+    try:
+        # Create a unique filename based on a hash of the prompt
         prompt_hash = hashlib.md5(prompt.encode()).hexdigest()[:10]
-        filename = f"dalle3_{prompt_hash}.png"
+        filename = f"dalle3_{prompt_hash}.png" 
         file_path = os.path.join(IMAGES_DIR, filename)
-        
-        # Descargar la imagen
+
+        # Download the image
         async with aiohttp.ClientSession() as session:
             async with session.get(image_url) as response:
                 if response.status == 200:
                     image_data = await response.read()
-                    
-                    # Guardar la imagen en archivo
+
+                    # Save the image to file
                     with open(file_path, 'wb') as f:
                         f.write(image_data)
-                    
-                    # Verificar que el archivo existe y tiene contenido
+
+                    # Verify that the file exists and has content
                     if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                        print(f"Image successfully saved to: {file_path}")
                         return filename
                     else:
-                        print(f"Error: Verificación de archivo fallida después de descarga: {file_path}")
+                        print(f"Error: File verification failed after download: {file_path}")
+                        # Attempt to remove potentially corrupted/empty file
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
                         return None
                 else:
                     resp_text = await response.text()
-                    print(f"Error al descargar imagen. Estado: {response.status}. URL: {image_url}. Respuesta: {resp_text}")
+                    print(f"Error downloading image. Status: {response.status}. URL: {image_url}. Response: {resp_text}")
                     return None
+    except aiohttp.ClientError as e:
+        print(f"Network error downloading image from {image_url}: {str(e)}")
+        return None
+    except IOError as e:
+         print(f"File system error saving image to {file_path}: {str(e)}")
+         return None
     except Exception as e:
-        print(f"Error descargando y guardando imagen de {image_url}: {str(e)}")
+        print(f"Error downloading and saving image from {image_url}: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def save_base64_image(b64_data: str, prompt: str) -> Optional[str]:
     """
-    Guarda una imagen codificada en base64 en un archivo.
-    
+    Saves a base64 encoded image to a file.
+
     Args:
-        b64_data: Datos de imagen codificados en base64
-        prompt: Prompt usado para generar la imagen (usado para el nombre del archivo)
-        
+        b64_data: Base64 encoded image data
+        prompt: Prompt used to generate the image (used for the filename)
+
     Returns:
-        Ruta al archivo de imagen guardado, o None si el guardado falló
+        Path to the saved image file, or None if saving failed
     """
     try:
         import base64
-        
-        # Crear un nombre de archivo único basado en un hash del prompt
+
+        # Create a unique filename based on a hash of the prompt
         prompt_hash = hashlib.md5(prompt.encode()).hexdigest()[:10]
-        filename = f"dalle3_{prompt_hash}.png"
+        filename = f"dalle3_{prompt_hash}.png" 
         file_path = os.path.join(IMAGES_DIR, filename)
-        
-        # Decodificar y guardar la imagen
+
+        # Decode and save the image
         image_data = base64.b64decode(b64_data)
-        
+
         with open(file_path, 'wb') as f:
             f.write(image_data)
-        
-        # Verificar que el archivo existe y tiene contenido
+
+        # Verify that the file exists and has content
         if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-            return file_path
+             print(f"Base64 image successfully saved to: {file_path}")
+             return file_path # Return the full path here, consistent with docstring
         else:
-            print(f"Error: Verificación de archivo fallida después de guardar base64: {file_path}")
+            print(f"Error: File verification failed after saving base64: {file_path}")
+             # Attempt to remove potentially corrupted/empty file
+            if os.path.exists(file_path):
+                os.remove(file_path)
             return None
-            
+
+    except base64.binascii.Error as e:
+         print(f"Error decoding base64 data: {str(e)}")
+         return None
+    except IOError as e:
+         print(f"File system error saving base64 image to {file_path}: {str(e)}")
+         return None
     except Exception as e:
-        print(f"Error guardando imagen base64: {str(e)}")
+        print(f"Error saving base64 image: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None
 
 # ---- AZURE SPEECH SERVICE ----
@@ -524,7 +637,7 @@ async def generate_speech(text: str, voice_name: str = VOICE_NAME, style: str = 
     try:
         audio_result = await asyncio.to_thread(
             synthesize_speech,
-            cleaned_text,  # Pass the thoroughly cleaned text
+            cleaned_text,  
             file_path,
             voice_name,
             AZURE_SPEECH_SUBSCRIPTION_KEY,

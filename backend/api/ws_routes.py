@@ -10,6 +10,7 @@ import traceback
 import asyncio
 
 from agents.learning_agent import AdaptiveLearningAgent
+from agents.langgraph_agent import LangGraphAdaptiveLearningAgent
 
 router = APIRouter()
 
@@ -77,11 +78,12 @@ async def websocket_session_endpoint(websocket: WebSocket, session_id: str):
     """
     await websocket.accept()
     connection_id = str(uuid.uuid4())
-    learning_agent: Optional[AdaptiveLearningAgent] = None
+    learning_agent = None
 
     try:
         learning_agent = websocket.app.state.learning_agent
-        if not isinstance(learning_agent, AdaptiveLearningAgent):
+        # Updated to accept either agent type
+        if not isinstance(learning_agent, (AdaptiveLearningAgent, LangGraphAdaptiveLearningAgent)):
              raise AttributeError("learning_agent in app.state is not the correct type.")
     except AttributeError:
          print("FATAL ERROR: learning_agent not found or incorrect type in app.state")
@@ -235,11 +237,12 @@ async def websocket_new_session_endpoint(websocket: WebSocket):
     await websocket.accept()
     connection_id = str(uuid.uuid4())
     print(f"WS connection {connection_id} opened for new_session endpoint.")
-    learning_agent: Optional[AdaptiveLearningAgent] = None
+    learning_agent = None
 
     try:
         learning_agent = websocket.app.state.learning_agent
-        if not isinstance(learning_agent, AdaptiveLearningAgent):
+        # Updated to accept either agent type
+        if not isinstance(learning_agent, (AdaptiveLearningAgent, LangGraphAdaptiveLearningAgent)):
              raise AttributeError("learning_agent in app.state is not the correct type.")
     except AttributeError:
          print("FATAL ERROR: learning_agent not found or incorrect type in app.state for new_session")
