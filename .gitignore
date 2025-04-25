@@ -1,18 +1,16 @@
 # Backend Python
 backend/venv/
 backend/__pycache__/
+/backend/api/__pycache__
+/backend/agents/__pycache__
+/backend/models/__pycache__
+/backend/data/__pycache__
+/backend/services/__pycache__
+
 backend/*.pyc
 backend/.env
 backend/instance/
 backend/static/*
-
-# Backend Python 2
-backend_2/venv/
-backend_2/__pycache__/
-backend_2/*.pyc
-backend_2/.env
-backend_2/instance/
-backend_2/static/*
 
 # Frontend Node
 frontend/node_modules/
@@ -29,11 +27,4 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
-/backend_2/api/__pycache__
-/backend_2/agents/__pycache__
-/backend_2/models/__pycache__
-/backend_2/data/__pycache__
-/backend_2/services/__pycache__
-/backend_2/services/__pycache__
-backend_2/services/__pycache__/azure_service.cpython-312.pyc
-/backend_2/services/__pycache__
+
