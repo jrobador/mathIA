@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Define caminos de aprendizaje (roadmaps) para diferentes temas matemáticos.
-Cada roadmap contiene la secuencia de temas y los requisitos para la progresión.
+It defines learning paths (roadmaps) for different mathematical topics.
+Each roadmap contains the sequence of topics and the requirements for progression.
 """
 
 from typing import Dict, List, Any, Optional
 
 class RoadmapTopic:
     """
-    Representa un tema dentro de un roadmap de aprendizaje.
+    Represents a topic within a learning roadmap.
     """
     def __init__(
         self, 
@@ -31,7 +31,7 @@ class RoadmapTopic:
         self.subtopics = subtopics or []
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convierte el tema a un diccionario."""
+        """Converts the topic to a dictionary."""
         return {
             "id": self.id,
             "title": self.title,
@@ -45,7 +45,7 @@ class RoadmapTopic:
 
 class LearningRoadmap:
     """
-    Define un roadmap completo de aprendizaje con una secuencia de temas.
+    Define a complete learning roadmap with a sequence of topics.
     """
     def __init__(self, id: str, title: str, description: str, topics: List[RoadmapTopic]):
         self.id = id
@@ -54,18 +54,18 @@ class LearningRoadmap:
         self.topics = topics
     
     def get_topic_ids(self) -> List[str]:
-        """Retorna la lista de IDs de temas en el roadmap."""
+        """Returns the list of topic IDs in the roadmap."""
         return [topic.id for topic in self.topics]
     
     def get_topic_by_id(self, topic_id: str) -> Optional[RoadmapTopic]:
-        """Encuentra un tema por su ID."""
+        """Find a topic by its ID."""
         for topic in self.topics:
             if topic.id == topic_id:
                 return topic
         return None
     
     def get_next_topic(self, current_topic_id: str) -> Optional[RoadmapTopic]:
-        """Obtiene el siguiente tema en la secuencia."""
+        """Gets the next topic in the sequence."""
         topic_ids = self.get_topic_ids()
         try:
             current_index = topic_ids.index(current_topic_id)
@@ -77,7 +77,7 @@ class LearningRoadmap:
         return None
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convierte el roadmap a un diccionario."""
+        """Converts the roadmap to a dictionary."""
         return {
             "id": self.id,
             "title": self.title,
@@ -85,9 +85,6 @@ class LearningRoadmap:
             "topics": [topic.to_dict() for topic in self.topics]
         }
 
-# ----- Definiciones de Roadmaps -----
-
-# Roadmap de Fracciones
 fractions_roadmap = LearningRoadmap(
     id="fractions",
     title="Fractions",
@@ -144,7 +141,6 @@ fractions_roadmap = LearningRoadmap(
     ]
 )
 
-# Roadmap de Suma
 addition_roadmap = LearningRoadmap(
     id="addition",
     title="Addition",
@@ -201,7 +197,6 @@ addition_roadmap = LearningRoadmap(
     ]
 )
 
-# Roadmap de Resta
 subtraction_roadmap = LearningRoadmap(
     id="subtraction",
     title="Subtraction",
@@ -258,7 +253,6 @@ subtraction_roadmap = LearningRoadmap(
     ]
 )
 
-# Roadmap de Multiplicación
 multiplication_roadmap = LearningRoadmap(
     id="multiplication",
     title="Multiplication",
@@ -308,7 +302,6 @@ multiplication_roadmap = LearningRoadmap(
     ]
 )
 
-# Roadmap de División
 division_roadmap = LearningRoadmap(
     id="division",
     title="Division",
@@ -358,7 +351,6 @@ division_roadmap = LearningRoadmap(
     ]
 )
 
-# Diccionario de roadmaps disponibles
 AVAILABLE_ROADMAPS = {
     "fractions": fractions_roadmap,
     "addition": addition_roadmap,

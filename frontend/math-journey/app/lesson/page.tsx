@@ -44,6 +44,8 @@ export default function LessonPage() {
   const sessionStartAttemptedRef = useRef(false);
   const userInfoLoadedRef = useRef(false);
   const toastShownRef = useRef(false);
+  const [forceShowContinue, setForceShowContinue] = useState(false);
+
   
   // --- useEffect Hooks ---
 
@@ -56,6 +58,21 @@ export default function LessonPage() {
       setLearningTheme(localStorage.getItem("learningTheme") || "space");
     }
   }, []);
+
+  useEffect(() => {
+    // Check for the exact Congratulations messages from the backend
+    const isCongratulationsMessage = 
+      currentOutput?.text?.includes("Congratulations! You have mastered the current topic") || 
+      currentOutput?.text?.includes("Congratulations! You have completed all the topics");
+    
+    // Set the flag if we detect a topic change message
+    if (currentOutput?.action_type === "topic_change" || isCongratulationsMessage) {
+      console.log("Topic advancement detected - forcing continue button to show");
+      setForceShowContinue(true);
+    } else {
+      setForceShowContinue(false);
+    }
+  }, [currentOutput]);
 
   // Start session logic
   useEffect(() => {
@@ -316,12 +333,14 @@ export default function LessonPage() {
 
   // CRITICAL FIX: Never show continue button during evaluation  
   const showContinueButton = 
+  forceShowContinue || (
     currentOutput && 
-    !currentOutput.prompt_for_answer && 
+    (!currentOutput.prompt_for_answer || currentOutput.action_type === "topic_change") && 
     !currentOutput.is_final_step && 
     !isLoading && 
     !errorState.isError && 
-    !isEvaluationReceived; // Never show during evaluation
+    !isEvaluationReceived
+  );
 
   // Debug info
   const debugInfo = {
@@ -410,137 +429,196 @@ export default function LessonPage() {
           
           {/* MAIN CONTENT: Show always, including during evaluation */}
           {currentOutput && (!isLoading || isEvaluationReceived) && !errorState.isError && (
-            <motion.div 
-              key={`content-${currentOutput.action_type || ""}-${currentOutput.text?.slice(0, 15) || ""}-${sessionId || ""}`}
-              initial={{ opacity: 0 }} 
-              animate={{ 
-                opacity: isEvaluationReceived ? 0.9 : 1,
-                scale: isEvaluationReceived ? 0.98 : 1
-              }} 
-              exit={{ opacity: 0 }} 
-              transition={{ duration: 0.4 }} 
-              className={`w-full max-w-3xl bg-white rounded-2xl shadow-xl my-4 md:my-6 relative border ${themeStyles.borderColor} overflow-hidden p-4 md:p-6 min-h-[400px] md:min-h-[450px] flex flex-col justify-between`}
-            >
-              <div className="flex flex-col justify-between h-full">
-                {/* Top Content */}
-                <div className="flex-grow text-center mb-4 overflow-y-auto">
-                  <div className={`text-xl md:text-2xl font-bold ${themeStyles.primaryColor} mb-4 prose max-w-none`}>
-                    <ReactMarkdown>{currentOutput?.text || ""}</ReactMarkdown>
-                  </div>
-                  
-                  {/* Image */}
-                  {currentOutput?.image_url && (
-                    <div className="mb-6 flex justify-center">
-                      <div className="relative h-[200px] w-full max-w-md rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
-                        <img 
-                          key={imageKey} 
-                          src={currentOutput.image_url} 
-                          alt="Math visual" 
-                          className="w-full h-full object-contain" 
-                          onError={(e) => { (e.target as HTMLImageElement).src = "/images/placeholder-math.png"; }} 
-                        />
+                <motion.div
+                // Unique key for remounting on significant content change
+                key={`content-${currentOutput.action_type || ""}-${currentOutput.text?.slice(0, 15) || ""}-${sessionId || ""}`}
+                initial={{ opacity: 0 }}
+                animate={{
+                  opacity: isEvaluationReceived ? 0.9 : 1,
+                  scale: isEvaluationReceived ? 0.98 : 1,
+                  // Add special animation for topic change
+                  y: currentOutput.action_type === "topic_change" ? [0, -5, 0] : 0
+                }}
+                exit={{ opacity: 0 }}
+                transition={{
+                  duration: 0.4,
+                  // Add spring effect for topic change
+                  ...(currentOutput.action_type === "topic_change" && {
+                    type: "spring",
+                    stiffness: 300,
+                    damping: 15
+                  })
+                }}
+                className={`w-full max-w-3xl
+                  ${currentOutput.action_type === "topic_change"
+                    ? "bg-gradient-to-br from-indigo-50 to-blue-100" // Special background for topic change
+                    : "bg-white" // Default background
+                  }
+                  rounded-2xl shadow-xl my-4 md:my-6 relative border
+                  ${currentOutput.action_type === "topic_change"
+                    ? "border-blue-300" // Special border for topic change
+                    : themeStyles.borderColor // Default border
+                  }
+                  overflow-hidden p-4 md:p-6 min-h-[400px] md:min-h-[450px] flex flex-col justify-between`}
+              >
+                <div className="flex flex-col justify-between h-full">
+                  {/* Add celebration icons for topic advancement */}
+                  {currentOutput.action_type === "topic_change" && (
+                    <>
+                      {/* Positioned Icons */}
+                      <div className="absolute top-4 right-4 animate-pulse">
+                        <span className="text-3xl">🎉</span>
                       </div>
-                    </div>
-                  )}
-                  
-                  {/* Audio button */}
-                  {currentOutput?.audio_url && (
-                    <div className="mb-4">
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        onClick={() => playAudio(currentOutput.audio_url)} 
-                        className="flex items-center bg-white/80 hover:bg-indigo-50"
-                        disabled={isPlayingAudio}
-                      >
-                        <Volume2 className="h-4 w-4 mr-2 text-indigo-600" /> 
-                        {isPlayingAudio ? "Playing..." : "Play Audio"}
-                      </Button>
-                    </div>
-                  )}
-                </div>
-                
-                {/* Bottom Area - Input or Continue Button */}
-                <div className="mt-auto pt-4 flex-shrink-0">
-                  {/* Input Area */}
-                  {showAnswerInput && (
-                    <div className="mt-4">
-                      <div className="flex justify-center items-center mb-4">
-                        <div 
-                          className={`flex items-center justify-center bg-indigo-100 rounded-xl px-4 md:px-6 py-2 md:py-3 min-w-[120px] md:min-w-[140px] h-[50px] md:h-[60px] border ${themeStyles.borderColor} shadow-sm`} 
-                          onKeyDown={handleKeyPress} 
-                          tabIndex={0}
-                        >
-                          <span className="text-2xl md:text-3xl font-bold text-indigo-900 tracking-wider">
-                            {userAnswer || "_"}
-                          </span>
+                      <div className="absolute top-4 left-4 animate-pulse delay-100">
+                        <span className="text-3xl">🌟</span>
+                      </div>
+                      <div className="absolute -top-2 left-1/2 transform -translate-x-1/2">
+                        <div className="flex space-x-2">
+                          <span className="text-2xl animate-bounce">🎊</span>
+                          <span className="text-2xl animate-bounce delay-150">🎯</span>
+                          <span className="text-2xl animate-bounce delay-300">🎊</span>
                         </div>
                       </div>
-                      
-                      {/* Number Pad */}
-                      <div className="w-full max-w-[280px] md:max-w-[320px] mx-auto grid grid-cols-3 gap-2">
-                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, "clear", 0, "backspace"].map((btn) => (
-                          <Button 
-                            key={btn} 
-                            variant={btn === "clear" ? "destructive" : "outline"} 
-                            className={`h-12 text-lg font-medium ${
-                              btn === "clear" 
-                                ? "bg-red-500/80 hover:bg-red-600/90 border border-red-400/30 text-white" 
-                                : "bg-white/80 backdrop-blur-sm border-indigo-100/60 hover:bg-indigo-50/90"
-                            }`} 
-                            onClick={() => handleNumberInput(btn.toString())} 
-                          >
-                            {btn === "backspace" ? "⌫" : btn === "clear" ? "Clear" : btn}
-                          </Button>
-                        ))}
+                    </>
+                  )}
+          
+                  {/* Top Content */}
+                  <div className={`flex-grow text-center mb-4 overflow-y-auto ${currentOutput.action_type === "topic_change" ? "pt-10" : ""}`}>
+                    {/* Add a special achievement badge for topic change */}
+                    {currentOutput.action_type === "topic_change" && (
+                      <div className="mb-4 inline-block bg-indigo-600 text-white px-4 py-1 rounded-full text-sm font-medium shadow-md">
+                        Topic Mastered!
                       </div>
-                      
-                      {/* Submit Button */}
+                    )}
+          
+                    {/* Main Text Content */}
+                    <div className={`text-xl md:text-2xl font-bold ${currentOutput.action_type === "topic_change" ? "text-indigo-700" : themeStyles.primaryColor} mb-4 prose max-w-none`}>
+                      <ReactMarkdown>{currentOutput?.text || ""}</ReactMarkdown>
+                    </div>
+          
+                    {/* Image */}
+                    {currentOutput?.image_url && (
+                      <div className="mb-6 flex justify-center">
+                        <div className="relative h-[200px] w-full max-w-md rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
+                          <img
+                            key={imageKey} // Use key to force re-render if URL changes but component doesn't remount
+                            src={currentOutput.image_url}
+                            alt="Math visual"
+                            className="w-full h-full object-contain"
+                            // Fallback image on error
+                            onError={(e) => { (e.target as HTMLImageElement).src = "/images/placeholder-math.png"; }}
+                          />
+                        </div>
+                      </div>
+                    )}
+          
+                    {/* Audio button - Conditionally render based on audio_url */}
+                    {currentOutput?.audio_url && currentOutput.audio_url.trim() !== '' && (
+                      <div className="mb-4">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => playAudio(currentOutput.audio_url!)} // Add non-null assertion or check
+                          className="flex items-center bg-white/80 hover:bg-indigo-50"
+                          disabled={isPlayingAudio}
+                        >
+                          <Volume2 className="h-4 w-4 mr-2 text-indigo-600" />
+                          {isPlayingAudio ? "Playing..." : "Play Audio"}
+                        </Button>
+                      </div>
+                    )}
+          
+                    {/* Add next topic preview for topic change */}
+                    {currentOutput.action_type === "topic_change" && currentOutput.new_topic_title && (
+                      <div className="mt-4 p-3 bg-white/80 rounded-lg border border-indigo-200 inline-block shadow-sm">
+                        <p className="text-sm text-gray-500 mb-1">Next Topic:</p>
+                        <p className="font-semibold text-indigo-800">{currentOutput.new_topic_title}</p>
+                      </div>
+                    )}
+                  </div>
+          
+                  {/* Bottom Area - Input or Continue Button */}
+                  <div className="mt-auto pt-4 flex-shrink-0">
+                    {/* Input Area */}
+                    {showAnswerInput && (
+                      <div className="mt-4">
+                        {/* Display User Input */}
+                        <div className="flex justify-center items-center mb-4">
+                          <div
+                            className={`flex items-center justify-center bg-indigo-100 rounded-xl px-4 md:px-6 py-2 md:py-3 min-w-[120px] md:min-w-[140px] h-[50px] md:h-[60px] border ${themeStyles.borderColor} shadow-sm cursor-text`}
+                            onKeyDown={handleKeyPress} // Handle keyboard events if needed (e.g., Enter to submit)
+                            tabIndex={0} // Make it focusable
+                          >
+                            <span className="text-2xl md:text-3xl font-bold text-indigo-900 tracking-wider">
+                              {userAnswer || "_"}
+                            </span>
+                          </div>
+                        </div>
+          
+                        {/* Number Pad */}
+                        <div className="w-full max-w-[280px] md:max-w-[320px] mx-auto grid grid-cols-3 gap-2">
+                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, "clear", 0, "backspace"].map((btn) => (
+                            <Button
+                              key={btn}
+                              variant={btn === "clear" ? "destructive" : "outline"}
+                              className={`h-12 text-lg font-medium transition-colors ${
+                                btn === "clear"
+                                  ? "bg-red-100 border-red-300 text-red-700 hover:bg-red-200" // Adjusted clear button style
+                                  : "bg-white/80 backdrop-blur-sm border-indigo-100/60 hover:bg-indigo-50/90"
+                              }`}
+                              onClick={() => handleNumberInput(btn.toString())}
+                            >
+                              {btn === "backspace" ? "⌫" : btn === "clear" ? "Clear" : btn}
+                            </Button>
+                          ))}
+                        </div>
+          
+                        {/* Submit Button */}
+                        <div className="mt-6 flex justify-center">
+                          <Button
+                            size="lg"
+                            onClick={handleSubmitAnswer}
+                            className={`${themeStyles.buttonColor} text-white px-8 py-3 rounded-full text-lg shadow-lg transition-all duration-300 hover:scale-105 hover:shadow-xl border border-indigo-400/30`}
+                            disabled={!userAnswer.trim() || isLoading}
+                          >
+                            {isLoading ? (
+                              <>
+                                <Loader2 className="h-5 w-5 animate-spin mr-2" /> Processing...
+                              </>
+                            ) : (
+                              <>
+                                Check Answer <ArrowRightIcon className="ml-2 h-5 w-5" />
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+          
+                    {/* Continue Button */}
+                    {showContinueButton && (
                       <div className="mt-6 flex justify-center">
-                        <Button 
-                          size="lg" 
-                          onClick={handleSubmitAnswer} 
-                          className={`${themeStyles.buttonColor} text-white px-8 py-3 rounded-full text-lg shadow-lg transition-all duration-300 hover:scale-105 hover:shadow-xl border border-indigo-400/30`} 
-                          disabled={!userAnswer.trim() || isLoading}
+                        <Button
+                          size="lg"
+                          onClick={handleContinue}
+                          className={`${themeStyles.buttonColor} text-white px-8 py-3 rounded-full text-lg shadow-lg transition-all duration-300 hover:scale-105 hover:shadow-xl border border-indigo-400/30`}
+                          disabled={isLoading}
                         >
                           {isLoading ? (
                             <>
-                              <Loader2 className="h-4 w-4 animate-spin mr-2" /> Processing...
+                              <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading...
                             </>
                           ) : (
                             <>
-                              Check Answer <ArrowRightIcon className="ml-2 h-4 w-4" />
+                              Continue <ArrowRightIcon className="ml-2 h-5 w-5" />
                             </>
                           )}
                         </Button>
                       </div>
-                    </div>
-                  )}
-                  
-                  {/* Continue Button */}
-                  {showContinueButton && (
-                    <div className="mt-6 flex justify-center">
-                      <Button 
-                        size="lg" 
-                        onClick={handleContinue} 
-                        className={`${themeStyles.buttonColor} text-white px-8 py-3 rounded-full text-lg shadow-lg transition-all duration-300 hover:scale-105 hover:shadow-xl border border-indigo-400/30`} 
-                        disabled={isLoading}
-                      >
-                        {isLoading ? (
-                          <>
-                            <Loader2 className="h-4 w-4 animate-spin mr-2" /> Loading...
-                          </>
-                        ) : (
-                          <>
-                            Continue <ArrowRightIcon className="ml-2 h-4 w-4" />
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
-              </div>
-            </motion.div>
+              </motion.div>
           )}
         </AnimatePresence>
       </div>

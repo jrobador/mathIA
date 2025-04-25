@@ -1,9 +1,11 @@
 from typing import Dict, List, Any, Optional
 from pydantic import BaseModel
 
+from data.roadmaps import AVAILABLE_ROADMAPS
+
 class RoadmapTopic(BaseModel):
     """
-    Representa un tema dentro de un roadmap de aprendizaje.
+    Represents a topic within a learning roadmap.
     """
     id: str
     title: str
@@ -16,26 +18,26 @@ class RoadmapTopic(BaseModel):
 
 class LearningRoadmap(BaseModel):
     """
-    Define un roadmap completo de aprendizaje con una secuencia de temas.
+    Defines a complete learning roadmap with a sequence of topics.
     """
     id: str
     title: str
     description: str
     topics: List[RoadmapTopic]
-    
+
     def get_topic_ids(self) -> List[str]:
-        """Retorna la lista de IDs de temas en el roadmap."""
+        """Returns the list of topic IDs in the roadmap."""
         return [topic.id for topic in self.topics]
-    
+
     def get_topic_by_id(self, topic_id: str) -> Optional[RoadmapTopic]:
-        """Encuentra un tema por su ID."""
+        """Finds a topic by its ID."""
         for topic in self.topics:
             if topic.id == topic_id:
                 return topic
         return None
-    
+
     def get_next_topic(self, current_topic_id: str) -> Optional[RoadmapTopic]:
-        """Obtiene el siguiente tema en la secuencia."""
+        """Gets the next topic in the sequence."""
         topic_ids = self.get_topic_ids()
         try:
             current_index = topic_ids.index(current_topic_id)
@@ -46,22 +48,18 @@ class LearningRoadmap(BaseModel):
             pass
         return None
 
-# Importar las definiciones de roadmaps desde el archivo original
-from data.roadmaps import AVAILABLE_ROADMAPS
-
 def get_roadmap(roadmap_id: str) -> Optional[LearningRoadmap]:
     """
-    Obtiene un roadmap por su ID.
-    
+    Gets a roadmap by its ID.
+
     Args:
-        roadmap_id: ID del roadmap a recuperar.
-    
+        roadmap_id: ID of the roadmap to retrieve.
+
     Returns:
-        LearningRoadmap o None si no existe.
+        LearningRoadmap instance or None if it doesn't exist.
     """
     roadmap_data = AVAILABLE_ROADMAPS.get(roadmap_id)
     if roadmap_data:
-        # Convertir el roadmap del formato original al nuevo formato Pydantic
         topics = [
             RoadmapTopic(
                 id=topic.id,
@@ -74,7 +72,7 @@ def get_roadmap(roadmap_id: str) -> Optional[LearningRoadmap]:
                 subtopics=topic.subtopics
             ) for topic in roadmap_data.topics
         ]
-        
+
         return LearningRoadmap(
             id=roadmap_data.id,
             title=roadmap_data.title,
@@ -85,13 +83,13 @@ def get_roadmap(roadmap_id: str) -> Optional[LearningRoadmap]:
 
 def get_topic_sequence(roadmap_id: str) -> List[str]:
     """
-    Obtiene la secuencia de IDs de temas para un roadmap específico.
-    
+    Gets the sequence of topic IDs for a specific roadmap.
+
     Args:
-        roadmap_id: ID del roadmap.
-        
+        roadmap_id: ID of the roadmap.
+
     Returns:
-        Lista de IDs de temas en orden secuencial.
+        List of topic IDs in sequential order.
     """
     roadmap = get_roadmap(roadmap_id)
     if roadmap:
@@ -100,14 +98,14 @@ def get_topic_sequence(roadmap_id: str) -> List[str]:
 
 def get_next_topic_id(roadmap_id: str, current_topic_id: str) -> Optional[str]:
     """
-    Obtiene el ID del siguiente tema en el roadmap.
-    
+    Gets the ID of the next topic in the roadmap.
+
     Args:
-        roadmap_id: ID del roadmap.
-        current_topic_id: ID del tema actual.
-    
+        roadmap_id: ID of the roadmap.
+        current_topic_id: ID of the current topic.
+
     Returns:
-        ID del siguiente tema o None si es el último o no se encuentra.
+        ID of the next topic or None if it's the last or not found.
     """
     roadmap = get_roadmap(roadmap_id)
     if roadmap:
@@ -118,10 +116,10 @@ def get_next_topic_id(roadmap_id: str, current_topic_id: str) -> Optional[str]:
 
 def get_all_roadmaps_info() -> List[Dict[str, Any]]:
     """
-    Retorna información básica sobre todos los roadmaps disponibles.
-    
+    Returns basic information about all available roadmaps.
+
     Returns:
-        Lista de diccionarios con información sobre cada roadmap.
+        List of dictionaries with information about each roadmap.
     """
     return [
         {

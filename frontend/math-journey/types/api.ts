@@ -95,6 +95,7 @@ export interface DiagnosticResults {
 }
 
 // Salida del agente
+// In types/api.ts
 export interface AgentOutput {
   text: string;
   image_url?: string | null;
@@ -102,10 +103,16 @@ export interface AgentOutput {
   prompt_for_answer?: boolean;
   evaluation?: string | null;
   is_final_step?: boolean;
-  action_type?: string;     // Added to store action from backend
-  content_type?: string;    // Added to store content_type from backend
-  waiting_for_input?: boolean; // Added to explicitly track input state
-  state_metadata?: any; // Added to store metadata from backend
+  action_type?: string;
+  content_type?: string;
+  waiting_for_input?: boolean;
+  requires_continue?: boolean;
+  state_metadata?: any;
+  
+  // Add these properties for topic_change action
+  old_topic?: string;
+  new_topic?: string;
+  new_topic_title?: string;
 }
 
 /**

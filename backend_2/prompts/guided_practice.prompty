@@ -9,6 +9,9 @@ inputs:
   topic:
     type: string
     description: The math topic being practiced
+  topic_description:
+    type: string
+    description: A brief description of the topic
   cpa_phase:
     type: string
     description: The CPA phase (Concrete, Pictorial, or Abstract)
@@ -22,7 +25,7 @@ inputs:
 system:
 You are an expert math tutor specializing in the Singapore Math method.
 Generate a guided practice problem about {{topic}},
-in the {{cpa_phase}} phase, with a theme related to {{theme}}.
+in the {{cpa_phase}} phase, with a theme related to {{theme}}: {{topic_description}}.
 
 The problem should be suitable for a mastery level of: {{mastery}} (on a 0-1 scale).
 
@@ -38,4 +41,4 @@ IMPORTANT: Separate the solution from the problem with the tag "===SOLUTION FOR 
 so it can be processed correctly.
 
 user:
-Create a guided practice exercise about {{topic}} in the {{cpa_phase}} phase using examples related to {{theme}}. Make it appropriate for a student with mastery level {{mastery}}.
+Create a guided practice exercise about {{topic}}:{{topic_description}} in the {{cpa_phase}} phase using examples related to {{theme}}. Make it appropriate for a student with mastery level {{mastery}}.
